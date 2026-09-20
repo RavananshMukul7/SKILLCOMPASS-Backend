@@ -1,0 +1,407 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AnalysisRunStatus {
+  PENDING
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ProficiencyLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+}
+
+enum JobRequirementType {
+  REQUIRED
+  PREFERRED
+}
+
+enum ProcessingJobType {
+  GITHUB_SYNC
+  REPOSITORY_ANALYSIS
+  PROFICIENCY_ANALYSIS
+  JOB_SYNC
+  MATCHING
+  SKILL_GAP_ANALYSIS
+}
+
+enum ProcessingJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique @db.VarChar(320)
+  passwordHash String   @db.Text
+  displayName  String?  @db.VarChar(120)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions          Session[]
+  githubAccount     GitHubAccount?
+  githubOAuthStates GitHubOAuthState[]
+  analysisRuns      AnalysisRun[]
+  userSkills        UserSkill[]
+  jobMatches        JobMatch[]
+  skillGaps         SkillGap[]
+  processingJobs    ProcessingJob[]
+}
+
+model Session {
+  id        String @id @default(uuid()) @db.Uuid
+  userId    String @db.Uuid
+  tokenHash String @unique @db.VarChar(255)
+
+  userAgent String? @db.Text
+  ipAddress String? @db.VarChar(100)
+
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([revokedAt])
+}
+
+model GitHubAccount {
+  id           String  @id @default(uuid()) @db.Uuid
+  userId       String  @unique @db.Uuid
+  githubUserId BigInt  @unique
+  username     String  @db.VarChar(255)
+  avatarUrl    String? @db.Text
+
+  githubInstallationId BigInt? @unique
+
+  accessTokenEncrypted  String  @db.Text
+  refreshTokenEncrypted String? @db.Text
+
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+
+  connectedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repositories Repository[]
+
+  @@index([githubUserId])
+}
+
+model GitHubOAuthState {
+  id                    String    @id @default(uuid()) @db.Uuid
+  userId                String    @db.Uuid
+  stateHash             String    @unique @db.VarChar(128)
+  codeVerifierEncrypted String    @db.Text
+  expiresAt             DateTime
+  consumedAt            DateTime?
+  createdAt             DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Repository {
+  id              String @id @default(uuid()) @db.Uuid
+  githubAccountId String @db.Uuid
+  githubRepoId    BigInt @unique
+
+  name       String @db.VarChar(255)
+  fullName   String @db.VarChar(500)
+  ownerLogin String @db.VarChar(255)
+
+  defaultBranch String? @db.VarChar(255)
+
+  isPrivate Boolean @default(false)
+  archived  Boolean @default(false)
+
+  htmlUrl     String  @db.Text
+  description String? @db.Text
+
+  stars Int @default(0)
+  forks Int @default(0)
+
+  pushedAt     DateTime?
+  lastSyncedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  githubAccount GitHubAccount        @relation(fields: [githubAccountId], references: [id], onDelete: Cascade)
+  analysisRuns  AnalysisRun[]
+  snapshots     RepositorySnapshot[]
+
+  @@index([githubAccountId])
+  @@index([fullName])
+  @@index([lastSyncedAt])
+}
+
+model AnalysisRun {
+  id           String            @id @default(uuid()) @db.Uuid
+  userId       String            @db.Uuid
+  repositoryId String            @db.Uuid
+  status       AnalysisRunStatus @default(PENDING)
+
+  startedAt    DateTime?
+  completedAt  DateTime?
+  errorMessage String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  snapshots              RepositorySnapshot[]
+  userSkills             UserSkill[]
+  proficiencyAssessments ProficiencyAssessment[]
+  skillGaps              SkillGap[]
+  processingJobs         ProcessingJob[]
+  jobMatches             JobMatch[]
+
+  @@index([userId, createdAt])
+  @@index([repositoryId, createdAt])
+  @@index([status, createdAt])
+}
+
+model RepositorySnapshot {
+  id            String @id @default(uuid()) @db.Uuid
+  repositoryId  String @db.Uuid
+  analysisRunId String @db.Uuid
+
+  commitSha  String   @db.VarChar(64)
+  capturedAt DateTime @default(now())
+
+  repository  Repository  @relation(fields: [repositoryId], references: [id], onDelete: Restrict)
+  analysisRun AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+
+  languages          RepositoryLanguage[]
+  technologyEvidence TechnologyEvidence[]
+
+  @@unique([repositoryId, analysisRunId])
+  @@index([repositoryId, capturedAt])
+  @@index([analysisRunId])
+}
+
+model RepositoryLanguage {
+  id         String  @id @default(uuid()) @db.Uuid
+  snapshotId String  @db.Uuid
+  language   String  @db.VarChar(120)
+  bytes      BigInt
+  percentage Decimal @db.Decimal(7, 4)
+
+  snapshot RepositorySnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@unique([snapshotId, language])
+  @@index([snapshotId])
+}
+
+model TechnologyEvidence {
+  id             String   @id @default(uuid()) @db.Uuid
+  snapshotId     String   @db.Uuid
+  technologyName String   @db.VarChar(255)
+  normalizedName String   @db.VarChar(255)
+  evidenceType   String   @db.VarChar(80)
+  evidenceValue  String?  @db.Text
+  confidence     Decimal  @db.Decimal(5, 4)
+  createdAt      DateTime @default(now())
+
+  snapshot      RepositorySnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  skillEvidence SkillEvidence[]
+
+  @@index([snapshotId, normalizedName])
+  @@index([normalizedName])
+}
+
+model Skill {
+  id             String  @id @default(uuid()) @db.Uuid
+  name           String  @db.VarChar(255)
+  normalizedName String  @unique @db.VarChar(255)
+  category       String? @db.VarChar(120)
+  description    String? @db.Text
+
+  userSkills UserSkill[]
+  jobSkills  JobSkill[]
+  skillGaps  SkillGap[]
+}
+
+model UserSkill {
+  id                  String   @id @default(uuid()) @db.Uuid
+  userId              String   @db.Uuid
+  skillId             String   @db.Uuid
+  currentScore        Decimal  @db.Decimal(6, 3)
+  confidence          Decimal  @db.Decimal(5, 4)
+  firstDetectedAt     DateTime
+  lastEvaluatedAt     DateTime
+  sourceAnalysisRunId String?  @db.Uuid
+
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skill             Skill        @relation(fields: [skillId], references: [id], onDelete: Restrict)
+  sourceAnalysisRun AnalysisRun? @relation(fields: [sourceAnalysisRunId], references: [id], onDelete: SetNull)
+
+  evidence    SkillEvidence[]
+  assessments ProficiencyAssessment[]
+
+  @@unique([userId, skillId])
+  @@index([userId, skillId])
+  @@index([userId, currentScore])
+}
+
+model SkillEvidence {
+  id                   String  @id @default(uuid()) @db.Uuid
+  userSkillId          String  @db.Uuid
+  technologyEvidenceId String  @db.Uuid
+  weight               Decimal @db.Decimal(6, 3)
+  reasoning            String? @db.Text
+
+  userSkill          UserSkill          @relation(fields: [userSkillId], references: [id], onDelete: Cascade)
+  technologyEvidence TechnologyEvidence @relation(fields: [technologyEvidenceId], references: [id], onDelete: Cascade)
+
+  @@unique([userSkillId, technologyEvidenceId])
+  @@index([userSkillId])
+  @@index([technologyEvidenceId])
+}
+
+model ProficiencyAssessment {
+  id                 String           @id @default(uuid()) @db.Uuid
+  userSkillId        String           @db.Uuid
+  analysisRunId      String           @db.Uuid
+  score              Decimal          @db.Decimal(6, 3)
+  level              ProficiencyLevel
+  confidence         Decimal          @db.Decimal(5, 4)
+  methodologyVersion String           @db.VarChar(50)
+  createdAt          DateTime         @default(now())
+
+  userSkill   UserSkill   @relation(fields: [userSkillId], references: [id], onDelete: Cascade)
+  analysisRun AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+
+  @@index([userSkillId, createdAt])
+  @@index([analysisRunId])
+}
+
+model Job {
+  id             String    @id @default(uuid()) @db.Uuid
+  source         String    @db.VarChar(100)
+  externalJobId  String    @db.VarChar(255)
+  title          String    @db.VarChar(500)
+  companyName    String    @db.VarChar(255)
+  location       String?   @db.VarChar(500)
+  employmentType String?   @db.VarChar(100)
+  remote         Boolean   @default(false)
+  url            String    @db.Text
+  description    String?   @db.Text
+  postedAt       DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  skills    JobSkill[]
+  matches   JobMatch[]
+  skillGaps SkillGap[]
+
+  @@unique([source, externalJobId])
+  @@index([source])
+  @@index([postedAt])
+  @@index([expiresAt])
+}
+
+model JobSkill {
+  id              String             @id @default(uuid()) @db.Uuid
+  jobId           String             @db.Uuid
+  skillId         String             @db.Uuid
+  requirementType JobRequirementType
+  importance      Decimal            @db.Decimal(5, 4)
+
+  job   Job   @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  skill Skill @relation(fields: [skillId], references: [id], onDelete: Restrict)
+
+  @@unique([jobId, skillId])
+  @@index([jobId, skillId])
+  @@index([skillId])
+}
+
+model JobMatch {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @db.Uuid
+  jobId            String   @db.Uuid
+  analysisRunId    String   @db.Uuid
+  matchScore       Decimal  @db.Decimal(6, 3)
+  skillCoverage    Decimal  @db.Decimal(5, 4)
+  skillGapCount    Int
+  explanation      String?  @db.Text
+  algorithmVersion String   @db.VarChar(50)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job         Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  analysisRun AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, jobId, analysisRunId, algorithmVersion])
+  @@index([userId, matchScore])
+  @@index([jobId])
+  @@index([analysisRunId])
+}
+
+model SkillGap {
+  id                 String   @id @default(uuid()) @db.Uuid
+  userId             String   @db.Uuid
+  skillId            String   @db.Uuid
+  jobId              String?  @db.Uuid
+  currentScore       Decimal  @db.Decimal(6, 3)
+  requiredImportance Decimal  @db.Decimal(5, 4)
+  gapScore           Decimal  @db.Decimal(6, 3)
+  priority           Decimal  @db.Decimal(6, 3)
+  analysisRunId      String   @db.Uuid
+  createdAt          DateTime @default(now())
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skill       Skill       @relation(fields: [skillId], references: [id], onDelete: Restrict)
+  job         Job?        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  analysisRun AnalysisRun @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+
+  @@index([userId, priority])
+  @@index([skillId])
+  @@index([jobId])
+  @@index([analysisRunId])
+}
+
+model ProcessingJob {
+  id            String              @id @default(uuid()) @db.Uuid
+  userId        String?             @db.Uuid
+  analysisRunId String?             @db.Uuid
+  type          ProcessingJobType
+  status        ProcessingJobStatus @default(QUEUED)
+  attempts      Int                 @default(0)
+  startedAt     DateTime?
+  completedAt   DateTime?
+  errorMessage  String?             @db.Text
+  createdAt     DateTime            @default(now())
+
+  user        User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  analysisRun AnalysisRun? @relation(fields: [analysisRunId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([userId, createdAt])
+  @@index([analysisRunId])
+}
