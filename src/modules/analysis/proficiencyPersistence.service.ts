@@ -1,14 +1,29 @@
 import { prisma } from "../../config/prisma.js";
-import type { ProficiencyResult } from "./proficiency.service.js";
+
+import type {
+  ProficiencyResult,
+} from "./proficiency.service.js";
 
 interface PersistProficienciesInput {
   analysisRunId: string;
+
   persistedSkills: Array<{
     userSkillId: string;
     normalizedName: string;
   }>;
+
   proficiencies: ProficiencyResult[];
 }
+
+const normalizeSkillName = (
+  name: string
+): string => {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/\./g, "")
+    .replace(/\s+/g, "-");
+};
 
 export const persistProficiencies = async ({
   analysisRunId,
@@ -17,7 +32,9 @@ export const persistProficiencies = async ({
 }: PersistProficienciesInput) => {
   const userSkillByName = new Map(
     persistedSkills.map((skill) => [
-      skill.normalizedName,
+      normalizeSkillName(
+        skill.normalizedName
+      ),
       skill.userSkillId,
     ])
   );
@@ -26,17 +43,26 @@ export const persistProficiencies = async ({
 
   for (const proficiency of proficiencies) {
     const normalizedName =
-      proficiency.skillName
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, "-");
+      normalizeSkillName(
+        proficiency.skillName
+      );
 
     const userSkillId =
-      userSkillByName.get(normalizedName);
+      userSkillByName.get(
+        normalizedName
+      );
 
     if (!userSkillId) {
+      console.warn(
+        `No persisted UserSkill found for proficiency: ${proficiency.skillName} (${normalizedName})`
+      );
+
       continue;
     }
+
+    const confidence = Number(
+      proficiency.confidence.toFixed(3)
+    );
 
     const assessment =
       await prisma.proficiencyAssessment.create({
@@ -45,9 +71,7 @@ export const persistProficiencies = async ({
           analysisRunId,
           score: proficiency.score,
           level: proficiency.level,
-          confidence: Number(
-            proficiency.confidence.toFixed(3)
-          ),
+          confidence,
           methodologyVersion:
             proficiency.methodologyVersion,
         },
@@ -59,11 +83,10 @@ export const persistProficiencies = async ({
       },
       data: {
         currentScore: proficiency.score,
-        confidence: Number(
-          proficiency.confidence.toFixed(3)
-        ),
+        confidence,
         lastEvaluatedAt: new Date(),
-        sourceAnalysisRunId: analysisRunId,
+        sourceAnalysisRunId:
+          analysisRunId,
       },
     });
 
@@ -73,9 +96,7 @@ export const persistProficiencies = async ({
       skillName: proficiency.skillName,
       score: proficiency.score,
       level: proficiency.level,
-      confidence: Number(
-        proficiency.confidence.toFixed(3)
-      ),
+      confidence,
       methodologyVersion:
         proficiency.methodologyVersion,
     });

@@ -55,6 +55,26 @@ describe("Express application integration", () => {
     expect(body.data.timestamp).toEqual(expect.any(String));
   });
 
+  it("should return 200 from the liveness endpoint", async () => {
+    const response = await fetch(`${baseUrl}/api/health/live`);
+
+    expect(response.status).toBe(200);
+
+    const body = await response.json();
+
+    expect(body).toEqual(
+      expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({
+          status: "ok",
+          service: "SkillCompass API",
+        }),
+      }),
+    );
+
+    expect(body.data.timestamp).toBeDefined();
+  });
+
   it("should return 404 for an unknown API route", async () => {
     const response = await fetch(`${baseUrl}/api/does-not-exist`);
 

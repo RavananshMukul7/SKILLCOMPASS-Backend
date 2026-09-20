@@ -143,7 +143,7 @@ export const logout = async (
   res: Response
 ) => {
   const sessionToken =
-    req.cookies?.SESSION_COOKIE_NAME;
+    req.cookies?.[SESSION_COOKIE_NAME];
 
   if (sessionToken) {
     await logoutUser(sessionToken);

@@ -21,6 +21,7 @@ import { errorHandler } from "./middleware/errorHandler.js";
 
 const app = express();
 
+app.disable("x-powered-by");
 /*
  * ============================================================
  * SECURITY

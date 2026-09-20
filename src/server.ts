@@ -1,28 +1,54 @@
 import app from "./app.js";
-
 import { env } from "./config/env.js";
 import { prisma } from "./config/prisma.js";
+import { redisConnection } from "./config/redis.js";
+import { analysisWorker } from "./workers/analysis.worker.js";
 
 const server = app.listen(env.PORT, () => {
   console.log(
     `SkillCompass API running on http://localhost:${env.PORT}`
   );
+
+  console.log(
+    "SkillCompass analysis worker running inside API process"
+  );
 });
 
-const shutdown = async (signal: string) => {
-  console.log(`${signal} received. Shutting down gracefully...`);
+const shutdown = async (
+  signal: string
+): Promise<void> => {
+  console.log(
+    `${signal} received. Shutting down gracefully...`
+  );
 
   server.close(async () => {
     try {
+      await analysisWorker.close();
+
+      await redisConnection.quit();
+
       await prisma.$disconnect();
 
-      console.log("Database connection closed.");
-      console.log("Server shut down successfully.");
+      console.log(
+        "Analysis worker stopped."
+      );
+
+      console.log(
+        "Redis connection closed."
+      );
+
+      console.log(
+        "Database connection closed."
+      );
+
+      console.log(
+        "Server shut down successfully."
+      );
 
       process.exit(0);
     } catch (error) {
       console.error(
-        "Error while closing database connection:",
+        "Error while shutting down:",
         error
       );
 

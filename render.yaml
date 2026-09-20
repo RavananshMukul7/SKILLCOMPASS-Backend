@@ -1,0 +1,87 @@
+services:
+  # =========================
+  # SkillCompass API + Worker
+  # =========================
+  - type: web
+    name: skillcompass-api
+    runtime: node
+    region: singapore
+    plan: free
+
+    buildCommand: npm ci && npm run prisma:migrate:deploy && npm run build
+    startCommand: npm start
+
+    healthCheckPath: /api/health/live
+
+    autoDeployTrigger: commit
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      - key: DATABASE_URL
+        fromDatabase:
+          name: skillcompass-db
+          property: connectionString
+
+      - key: REDIS_URL
+        fromService:
+          name: skillcompass-redis
+          type: keyvalue
+          property: connectionString
+
+      - key: CORS_ORIGIN
+        sync: false
+
+      - key: GITHUB_APP_ID
+        sync: false
+
+      - key: GITHUB_CLIENT_ID
+        sync: false
+
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+
+      - key: GITHUB_CALLBACK_URL
+        sync: false
+
+      - key: GITHUB_TOKEN_ENCRYPTION_KEY
+        sync: false
+
+      - key: GITHUB_APP_PRIVATE_KEY_PATH
+        value: /etc/secrets/github-app.pem
+
+      - key: ADZUNA_APP_ID
+        sync: false
+
+      - key: ADZUNA_APP_KEY
+        sync: false
+
+      - key: ADZUNA_COUNTRY
+        value: in
+
+      - key: ADZUNA_QUERY
+        value: software developer
+
+      - key: ADZUNA_RESULTS_PER_PAGE
+        value: "10"
+
+  # =========================
+  # Redis-compatible Queue
+  # =========================
+  - type: keyvalue
+    name: skillcompass-redis
+    region: singapore
+    plan: free
+
+    maxmemoryPolicy: noeviction
+
+    ipAllowList: []
+
+# =========================
+# PostgreSQL
+# =========================
+databases:
+  - name: skillcompass-db
+    region: singapore
+    plan: free

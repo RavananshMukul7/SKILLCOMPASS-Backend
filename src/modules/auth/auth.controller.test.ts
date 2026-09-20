@@ -229,7 +229,7 @@ describe("auth controllers", () => {
   it("should logout the current session", async () => {
     const req: any = {
       cookies: {
-        SESSION_COOKIE_NAME: "session-token",
+        "session": "session-token",
       },
     };
 

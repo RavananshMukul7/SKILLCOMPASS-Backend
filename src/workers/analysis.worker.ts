@@ -3,13 +3,9 @@ import { redisConnection } from "../config/redis.js";
 import { prisma } from "../config/prisma.js";
 import type { RepositoryAnalysisJob } from "../queues/analysis.types.js";
 
-import {
-  calculateProficiencies,
-} from "../modules/analysis/proficiency.service.js";
+import { calculateProficiencies } from "../modules/analysis/proficiency.service.js";
 
-import {
-  persistProficiencies,
-} from "../modules/analysis/proficiencyPersistence.service.js";
+import { persistProficiencies } from "../modules/analysis/proficiencyPersistence.service.js";
 
 import {
   getGitHubRepository,
@@ -18,27 +14,17 @@ import {
   getGitHubRepositoryLanguages,
 } from "../modules/github/githubRepository.service.js";
 
-import {
-  detectTechnologiesFromSource,
-} from "../modules/analysis/technologyDetection.service.js";
+import { detectTechnologiesFromSource } from "../modules/analysis/technologyDetection.service.js";
 
 import {
   extractSkillsFromTechnologies,
   type SkillTechnologyInput,
 } from "../modules/analysis/skillExtraction.service.js";
 
-import {
-  persistExtractedSkills,
-} from "../modules/analysis/skillPersistence.service.js";
+import { persistExtractedSkills } from "../modules/analysis/skillPersistence.service.js";
 
-const processAnalysis = async (
-  job: Job<RepositoryAnalysisJob>
-) => {
-  const {
-    analysisRunId,
-    repositoryId,
-    userId,
-  } = job.data;
+const processAnalysis = async (job: Job<RepositoryAnalysisJob>) => {
+  const { analysisRunId, repositoryId, userId } = job.data;
 
   console.log("Starting repository analysis:", {
     analysisRunId,
@@ -57,118 +43,91 @@ const processAnalysis = async (
   });
 
   try {
-    const repository =
-      await prisma.repository.findFirst({
-        where: {
-          id: repositoryId,
-          githubAccount: {
-            userId,
-          },
+    const repository = await prisma.repository.findFirst({
+      where: {
+        id: repositoryId,
+        githubAccount: {
+          userId,
         },
-        select: {
-          id: true,
-          name: true,
-          fullName: true,
-          ownerLogin: true,
-        },
-      });
+      },
+      select: {
+        id: true,
+        name: true,
+        fullName: true,
+        ownerLogin: true,
+      },
+    });
 
     if (!repository) {
       throw new Error(
-        "Repository no longer exists or is not owned by the user"
+        "Repository no longer exists or is not owned by the user",
       );
     }
 
-    console.log(
-      "Analyzing repository:",
-      repository.fullName
-    );
+    console.log("Analyzing repository:", repository.fullName);
 
-    const githubAccount =
-      await prisma.gitHubAccount.findUnique({
-        where: {
-          userId,
-        },
-        select: {
-          githubInstallationId: true,
-        },
-      });
+    const githubAccount = await prisma.gitHubAccount.findUnique({
+      where: {
+        userId,
+      },
+      select: {
+        githubInstallationId: true,
+      },
+    });
 
     if (!githubAccount?.githubInstallationId) {
-      throw new Error(
-        "GitHub installation is not available"
-      );
+      throw new Error("GitHub installation is not available");
     }
 
-    const githubRepository =
-      await getGitHubRepository(
-        githubAccount.githubInstallationId,
-        repository.ownerLogin,
-        repository.name
-      );
-
-    console.log(
-      "GitHub repository fetched:",
-      {
-        id: githubRepository.id,
-        fullName:
-          githubRepository.full_name,
-        defaultBranch:
-          githubRepository.default_branch,
-      }
+    const githubRepository = await getGitHubRepository(
+      githubAccount.githubInstallationId,
+      repository.ownerLogin,
+      repository.name,
     );
 
-    const repositoryTree =
-      await getGitHubRepositoryTree(
-        githubAccount.githubInstallationId,
-        repository.ownerLogin,
-        repository.name,
-        githubRepository.default_branch ??
-          "main"
-      );
+    console.log("GitHub repository fetched:", {
+      id: githubRepository.id,
+      fullName: githubRepository.full_name,
+      defaultBranch: githubRepository.default_branch,
+    });
 
-    console.log(
-      "GitHub repository tree fetched:",
-      {
-        commitSha: repositoryTree.sha,
-        fileCount:
-          repositoryTree.tree.filter(
-            (item) => item.type === "blob"
-          ).length,
-        truncated:
-          repositoryTree.truncated,
-      }
+    const repositoryTree = await getGitHubRepositoryTree(
+      githubAccount.githubInstallationId,
+      repository.ownerLogin,
+      repository.name,
+      githubRepository.default_branch ?? "main",
     );
 
-    const sourceFiles =
-      repositoryTree.tree.filter(
-        (item) =>
-          item.type === "blob" &&
-          (
-            item.path.endsWith(".ts") ||
-            item.path.endsWith(".tsx") ||
-            item.path.endsWith(".js") ||
-            item.path.endsWith(".jsx") ||
-            item.path.endsWith(".py") ||
-            item.path.endsWith(".cpp") ||
-            item.path.endsWith(".cc") ||
-            item.path.endsWith(".c") ||
-            item.path.endsWith(".java") ||
-            item.path.endsWith(".go")
-          )
-      );
+    console.log("GitHub repository tree fetched:", {
+      commitSha: repositoryTree.sha,
+      fileCount: repositoryTree.tree.filter((item) => item.type === "blob")
+        .length,
+      truncated: repositoryTree.truncated,
+    });
+
+    const sourceFiles = repositoryTree.tree.filter(
+      (item) =>
+        item.type === "blob" &&
+        (item.path.endsWith(".ts") ||
+          item.path.endsWith(".tsx") ||
+          item.path.endsWith(".js") ||
+          item.path.endsWith(".jsx") ||
+          item.path.endsWith(".py") ||
+          item.path.endsWith(".cpp") ||
+          item.path.endsWith(".cc") ||
+          item.path.endsWith(".c") ||
+          item.path.endsWith(".java") ||
+          item.path.endsWith(".go")),
+    );
 
     console.log(
       "Repository files:",
-      sourceFiles.map(
-        (file) => file.path
-      )
+      sourceFiles.map((file) => file.path),
     );
 
     const detectedTechnologies = [];
 
-    const skillTechnologyInputs:
-      SkillTechnologyInput[] = [];
+    const skillTechnologyInputs: SkillTechnologyInput[] = [];
 
     /*
      * --------------------------------------------------
@@ -177,69 +136,46 @@ const processAnalysis = async (
      */
 
     for (const sourceFile of sourceFiles) {
-      const fileContent =
-        await getGitHubFileContent(
-          githubAccount.githubInstallationId,
-          repository.ownerLogin,
-          repository.name,
-          sourceFile.path
-        );
-
-      console.log(
-        "GitHub source file fetched:",
-        {
-          path: fileContent.path,
-          size: fileContent.size,
-          preview:
-            fileContent.content.slice(
-              0,
-              120
-            ),
-        }
+      const fileContent = await getGitHubFileContent(
+        githubAccount.githubInstallationId,
+        repository.ownerLogin,
+        repository.name,
+        sourceFile.path,
       );
 
-      const fileTechnologies =
-        detectTechnologiesFromSource({
-          path: fileContent.path,
-          content: fileContent.content,
-        });
+      console.log("GitHub source file fetched:", {
+        path: fileContent.path,
+        size: fileContent.size,
+        preview: fileContent.content.slice(0, 120),
+      });
 
-      detectedTechnologies.push(
-        ...fileTechnologies
-      );
+      const fileTechnologies = detectTechnologiesFromSource({
+        path: fileContent.path,
+        content: fileContent.content,
+      });
+
+      detectedTechnologies.push(...fileTechnologies);
 
       for (const technology of fileTechnologies) {
         skillTechnologyInputs.push({
-          technologyName:
-            technology.technologyName,
+          technologyName: technology.technologyName,
 
-          normalizedName:
-            technology.normalizedName,
+          normalizedName: technology.normalizedName,
 
-          confidence:
-            technology.confidence,
+          confidence: technology.confidence,
 
-          evidenceType:
-            technology.evidenceType,
+          evidenceType: technology.evidenceType,
 
-          evidenceValue:
-            technology.evidenceValue,
+          evidenceValue: technology.evidenceValue,
 
           path: fileContent.path,
         });
       }
 
-      console.log(
-        "Technologies detected in file:",
-        {
-          path: fileContent.path,
-          technologies:
-            fileTechnologies.map(
-              (item) =>
-                item.technologyName
-            ),
-        }
-      );
+      console.log("Technologies detected in file:", {
+        path: fileContent.path,
+        technologies: fileTechnologies.map((item) => item.technologyName),
+      });
     }
 
     /*
@@ -248,27 +184,20 @@ const processAnalysis = async (
      * --------------------------------------------------
      */
 
-    const snapshot =
-      await prisma.repositorySnapshot.create({
-        data: {
-          repositoryId:
-            repository.id,
+    const snapshot = await prisma.repositorySnapshot.create({
+      data: {
+        repositoryId: repository.id,
 
-          analysisRunId,
+        analysisRunId,
 
-          commitSha:
-            repositoryTree.sha,
-        },
-      });
+        commitSha: repositoryTree.sha,
+      },
+    });
 
-    console.log(
-      "Repository snapshot created:",
-      {
-        snapshotId: snapshot.id,
-        commitSha:
-          snapshot.commitSha,
-      }
-    );
+    console.log("Repository snapshot created:", {
+      snapshotId: snapshot.id,
+      commitSha: snapshot.commitSha,
+    });
 
     /*
      * --------------------------------------------------
@@ -276,44 +205,27 @@ const processAnalysis = async (
      * --------------------------------------------------
      */
 
-    if (
-      detectedTechnologies.length > 0
-    ) {
-      await prisma.technologyEvidence.createMany(
-        {
-          data:
-            detectedTechnologies.map(
-              (technology) => ({
-                snapshotId:
-                  snapshot.id,
+    if (detectedTechnologies.length > 0) {
+      await prisma.technologyEvidence.createMany({
+        data: detectedTechnologies.map((technology) => ({
+          snapshotId: snapshot.id,
 
-                technologyName:
-                  technology.technologyName,
+          technologyName: technology.technologyName,
 
-                normalizedName:
-                  technology.normalizedName,
+          normalizedName: technology.normalizedName,
 
-                evidenceType:
-                  technology.evidenceType,
+          evidenceType: technology.evidenceType,
 
-                evidenceValue:
-                  technology.evidenceValue,
+          evidenceValue: technology.evidenceValue,
 
-                confidence:
-                  technology.confidence,
-              })
-            ),
-        }
-      );
+          confidence: technology.confidence,
+        })),
+      });
     }
 
-    console.log(
-      "Code-level technology evidence stored:",
-      {
-        count:
-          detectedTechnologies.length,
-      }
-    );
+    console.log("Code-level technology evidence stored:", {
+      count: detectedTechnologies.length,
+    });
 
     /*
      * --------------------------------------------------
@@ -321,12 +233,11 @@ const processAnalysis = async (
      * --------------------------------------------------
      */
 
-    const languages =
-      await getGitHubRepositoryLanguages(
-        githubAccount.githubInstallationId,
-        repository.ownerLogin,
-        repository.name
-      );
+    const languages = await getGitHubRepositoryLanguages(
+      githubAccount.githubInstallationId,
+      repository.ownerLogin,
+      repository.name,
+    );
 
     /*
      * Feed GitHub language detection into
@@ -339,66 +250,42 @@ const processAnalysis = async (
      * JavaScript Programming
      */
 
-    for (const [
-      language,
-      bytes,
-    ] of Object.entries(languages)) {
+    for (const [language, bytes] of Object.entries(languages)) {
       skillTechnologyInputs.push({
         technologyName: language,
 
-        normalizedName:
-          language.trim().toLowerCase(),
+        normalizedName: language.trim().toLowerCase(),
 
         confidence: 1,
 
-        evidenceType:
-          "GITHUB_LANGUAGE",
+        evidenceType: "GITHUB_LANGUAGE",
 
-        evidenceValue:
-          `${bytes} bytes detected by GitHub`,
+        evidenceValue: `${bytes} bytes detected by GitHub`,
 
-        path:
-          "[GitHub Language Detection]",
+        path: "[GitHub Language Detection]",
       });
     }
 
-    const totalBytes =
-      Object.values(languages).reduce(
-        (sum, bytes) =>
-          sum + bytes,
-        0
-      );
+    const totalBytes = Object.values(languages).reduce(
+      (sum, bytes) => sum + bytes,
+      0,
+    );
 
     if (totalBytes > 0) {
-      await prisma.repositoryLanguage.createMany(
-        {
-          data:
-            Object.entries(
-              languages
-            ).map(
-              ([language, bytes]) => ({
-                snapshotId:
-                  snapshot.id,
+      await prisma.repositoryLanguage.createMany({
+        data: Object.entries(languages).map(([language, bytes]) => ({
+          snapshotId: snapshot.id,
 
-                language,
+          language,
 
-                bytes:
-                  BigInt(bytes),
+          bytes: BigInt(bytes),
 
-                percentage:
-                  (bytes /
-                    totalBytes) *
-                  100,
-              })
-            ),
-        }
-      );
+          percentage: (bytes / totalBytes) * 100,
+        })),
+      });
     }
 
-    console.log(
-      "Repository languages stored:",
-      languages
-    );
+    console.log("Repository languages stored:", languages);
 
     /*
      * --------------------------------------------------
@@ -406,45 +293,26 @@ const processAnalysis = async (
      * --------------------------------------------------
      */
 
-    const normalizeTechnologyName = (
-      name: string
-    ): string =>
+    const normalizeTechnologyName = (name: string): string =>
       name.trim().toLowerCase();
 
-    await prisma.technologyEvidence.createMany(
-      {
-        data:
-          Object.entries(
-            languages
-          ).map(
-            ([language, bytes]) => ({
-              snapshotId:
-                snapshot.id,
+    await prisma.technologyEvidence.createMany({
+      data: Object.entries(languages).map(([language, bytes]) => ({
+        snapshotId: snapshot.id,
 
-              technologyName:
-                language,
+        technologyName: language,
 
-              normalizedName:
-                normalizeTechnologyName(
-                  language
-                ),
+        normalizedName: normalizeTechnologyName(language),
 
-              evidenceType:
-                "GITHUB_LANGUAGE",
+        evidenceType: "GITHUB_LANGUAGE",
 
-              evidenceValue:
-                `${bytes} bytes detected by GitHub`,
+        evidenceValue: `${bytes} bytes detected by GitHub`,
 
-              confidence: 1,
-            })
-          ),
-      }
-    );
+        confidence: 1,
+      })),
+    });
 
-    console.log(
-      "GitHub language evidence stored:",
-      Object.keys(languages)
-    );
+    console.log("GitHub language evidence stored:", Object.keys(languages));
 
     /*
      * --------------------------------------------------
@@ -452,25 +320,19 @@ const processAnalysis = async (
      * --------------------------------------------------
      */
 
-    const extractedSkills =
-      extractSkillsFromTechnologies(
-        skillTechnologyInputs
-      );
+    const extractedSkills = extractSkillsFromTechnologies(
+      skillTechnologyInputs,
+    );
 
     console.log(
       "Skills extracted:",
-      extractedSkills.map(
-        (skill) => ({
-          skillName:
-            skill.skillName,
+      extractedSkills.map((skill) => ({
+        skillName: skill.skillName,
 
-          confidence:
-            skill.confidence,
+        confidence: skill.confidence,
 
-          evidenceCount:
-            skill.evidence.length,
-        })
-      )
+        evidenceCount: skill.evidence.length,
+      })),
     );
 
     /*
@@ -482,38 +344,27 @@ const processAnalysis = async (
      * TechnologyEvidence IDs.
      */
 
-    const storedTechnologyEvidence =
-      await prisma.technologyEvidence.findMany(
-        {
-          where: {
-            snapshotId:
-              snapshot.id,
-          },
+    const storedTechnologyEvidence = await prisma.technologyEvidence.findMany({
+      where: {
+        snapshotId: snapshot.id,
+      },
 
-          select: {
-            id: true,
-            normalizedName: true,
-          },
-        }
-      );
+      select: {
+        id: true,
+        normalizedName: true,
+      },
+    });
 
-    const technologyEvidenceByName =
-      new Map<
-        string,
-        {
-          id: string;
-          normalizedName: string;
-        }
-      >();
+    const technologyEvidenceByName = new Map<
+      string,
+      {
+        id: string;
+        normalizedName: string;
+      }
+    >();
 
-    for (
-      const evidence of
-      storedTechnologyEvidence
-    ) {
-      technologyEvidenceByName.set(
-        evidence.normalizedName,
-        evidence
-      );
+    for (const evidence of storedTechnologyEvidence) {
+      technologyEvidenceByName.set(evidence.normalizedName, evidence);
     }
 
     /*
@@ -522,18 +373,14 @@ const processAnalysis = async (
      * --------------------------------------------------
      */
 
-    const persistedSkills =
-      await persistExtractedSkills({
-        userId,
-        analysisRunId,
-        skills: extractedSkills,
-        technologyEvidenceByName,
-      });
+    const persistedSkills = await persistExtractedSkills({
+      userId,
+      analysisRunId,
+      skills: extractedSkills,
+      technologyEvidenceByName,
+    });
 
-    console.log(
-      "Skills persisted:",
-      persistedSkills
-    );
+    console.log("Skills persisted:", persistedSkills);
 
     /*
      * --------------------------------------------------
@@ -541,28 +388,29 @@ const processAnalysis = async (
      * --------------------------------------------------
      */
 
-    const proficiencies =
-      calculateProficiencies(
-        extractedSkills
-      );
+    const proficiencies = calculateProficiencies(extractedSkills);
+
+    console.log(
+      "DEBUG EXTRACTED SKILLS:",
+      extractedSkills.map((skill) => ({
+        skillName: skill.skillName,
+        normalizedName: skill.normalizedName,
+        confidence: skill.confidence,
+        evidenceCount: skill.evidence.length,
+      })),
+    );
 
     console.log(
       "Proficiencies calculated:",
-      proficiencies.map(
-        (proficiency) => ({
-          skillName:
-            proficiency.skillName,
+      proficiencies.map((proficiency) => ({
+        skillName: proficiency.skillName,
 
-          score:
-            proficiency.score,
+        score: proficiency.score,
 
-          level:
-            proficiency.level,
+        level: proficiency.level,
 
-          confidence:
-            proficiency.confidence,
-        })
-      )
+        confidence: proficiency.confidence,
+      })),
     );
 
     /*
@@ -571,17 +419,13 @@ const processAnalysis = async (
      * --------------------------------------------------
      */
 
-    const persistedProficiencies =
-      await persistProficiencies({
-        analysisRunId,
-        persistedSkills,
-        proficiencies,
-      });
+    const persistedProficiencies = await persistProficiencies({
+      analysisRunId,
+      persistedSkills,
+      proficiencies,
+    });
 
-    console.log(
-      "Proficiency assessments persisted:",
-      persistedProficiencies
-    );
+    console.log("Proficiency assessments persisted:", persistedProficiencies);
 
     /*
      * --------------------------------------------------
@@ -600,23 +444,17 @@ const processAnalysis = async (
       },
     });
 
-    console.log(
-      "Repository analysis completed:",
-      analysisRunId
-    );
+    console.log("Repository analysis completed:", analysisRunId);
 
     return {
       analysisRunId,
       repositoryId,
       status: "COMPLETED",
-      skillCount:
-        persistedSkills.length,
+      skillCount: persistedSkills.length,
     };
   } catch (error) {
     const errorMessage =
-      error instanceof Error
-        ? error.message
-        : "Unknown analysis error";
+      error instanceof Error ? error.message : "Unknown analysis error";
 
     await prisma.analysisRun.update({
       where: {
@@ -630,55 +468,33 @@ const processAnalysis = async (
       },
     });
 
-    console.error(
-      "Repository analysis failed:",
-      {
-        analysisRunId,
-        error: errorMessage,
-      }
-    );
+    console.error("Repository analysis failed:", {
+      analysisRunId,
+      error: errorMessage,
+    });
 
     throw error;
   }
 };
 
-export const analysisWorker =
-  new Worker<RepositoryAnalysisJob>(
-    "repository-analysis",
-    processAnalysis,
-    {
-      connection:
-        redisConnection,
+export const analysisWorker = new Worker<RepositoryAnalysisJob>(
+  "repository-analysis",
+  processAnalysis,
+  {
+    connection: redisConnection,
 
-      concurrency: 2,
-    }
-  );
-
-analysisWorker.on(
-  "completed",
-  (job) => {
-    console.log(
-      `Analysis job completed: ${job.id}`
-    );
-  }
+    concurrency: 2,
+  },
 );
 
-analysisWorker.on(
-  "failed",
-  (job, error) => {
-    console.error(
-      `Analysis job failed: ${job?.id}`,
-      error
-    );
-  }
-);
+analysisWorker.on("completed", (job) => {
+  console.log(`Analysis job completed: ${job.id}`);
+});
 
-analysisWorker.on(
-  "error",
-  (error) => {
-    console.error(
-      "Analysis worker error:",
-      error
-    );
-  }
-);
+analysisWorker.on("failed", (job, error) => {
+  console.error(`Analysis job failed: ${job?.id}`, error);
+});
+
+analysisWorker.on("error", (error) => {
+  console.error("Analysis worker error:", error);
+});

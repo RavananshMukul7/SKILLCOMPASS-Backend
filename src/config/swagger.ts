@@ -275,6 +275,7 @@ const swaggerDocument: OpenAPIV3.Document = {
   },
 
   paths: {
+
     /*
      * ============================================================
      * AUTHENTICATION
@@ -1353,6 +1354,51 @@ const swaggerDocument: OpenAPIV3.Document = {
           },
           "503": {
             description: "Database unavailable.",
+          },
+        },
+      },
+    },
+
+    "/api/health/live": {
+      get: {
+        tags: ["Health"],
+        summary: "Liveness check",
+        description:
+          "Checks whether the SkillCompass API process is alive. This endpoint does not check database connectivity.",
+        responses: {
+          200: {
+            description: "API process is alive",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    success: {
+                      type: "boolean",
+                      example: true,
+                    },
+                    data: {
+                      type: "object",
+                      properties: {
+                        status: {
+                          type: "string",
+                          example: "ok",
+                        },
+                        service: {
+                          type: "string",
+                          example: "SkillCompass API",
+                        },
+                        timestamp: {
+                          type: "string",
+                          format: "date-time",
+                          example: "2026-09-20T18:44:00.000Z",
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
       },
