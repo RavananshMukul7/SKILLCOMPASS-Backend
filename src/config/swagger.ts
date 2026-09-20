@@ -12,7 +12,7 @@ const swaggerDocument: OpenAPIV3.Document = {
 
   servers: [
     {
-      url: "http://localhost:3000",
+      url: "/",
       description: "Local development server",
     },
   ],
