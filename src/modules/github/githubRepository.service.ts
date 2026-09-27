@@ -183,6 +183,11 @@ export const getGitHubRepositoryLanguages = async (
 };
 
 export const syncUserRepositories = async (userId: string) => {
+  /*
+   * GitHubAccount is used only as the GitHub integration source.
+   *
+   * Repository ownership belongs to the SkillCompass User.
+   */
   const githubAccount = await prisma.gitHubAccount.findUnique({
     where: {
       userId,
@@ -205,6 +210,12 @@ export const syncUserRepositories = async (userId: string) => {
     );
   }
 
+  /*
+   * GitHubAccount is still required here because it provides
+   * the installation through which we fetch repositories.
+   *
+   * It does NOT become the owner of the Repository records.
+   */
   const { token } = await createInstallationAccessToken(
     githubAccount.githubInstallationId,
   );
@@ -278,9 +289,12 @@ export const syncUserRepositories = async (userId: string) => {
 
     const defaultBranch = repository.default_branch ?? null;
 
-    /**
-     * Do not depend on a Prisma composite unique key here.
-     * Find the repository by the user's ownership + GitHub repository ID.
+    /*
+     * Repository ownership:
+     *
+     * User -> Repository
+     *
+     * GitHubAccount is NOT the owner.
      */
     const existingRepository = await prisma.repository.findFirst({
       where: {
@@ -294,7 +308,6 @@ export const syncUserRepositories = async (userId: string) => {
 
     const repositoryData = {
       userId,
-      githubAccountId: githubAccount.id,
       githubRepoId,
       name: repository.name,
       fullName,
@@ -320,7 +333,6 @@ export const syncUserRepositories = async (userId: string) => {
           id: existingRepository.id,
         },
         data: {
-          githubAccountId: repositoryData.githubAccountId,
           githubRepoId: repositoryData.githubRepoId,
           name: repositoryData.name,
           fullName: repositoryData.fullName,
@@ -350,14 +362,14 @@ export const syncUserRepositories = async (userId: string) => {
     }
 
     syncedRepositories.push({
-      /**
-       * THIS is the value the frontend must use for analysis.
-       * It is the SkillCompass PostgreSQL UUID.
+      /*
+       * This is the SkillCompass PostgreSQL UUID.
+       * The frontend should use this ID for analysis.
        */
       id: skillCompassRepositoryId,
 
-      /**
-       * Keep the original GitHub numeric ID separately.
+      /*
+       * Keep the original GitHub numeric repository ID separately.
        */
       githubRepoId: repository.id,
 
@@ -378,17 +390,26 @@ export const syncUserRepositories = async (userId: string) => {
   }
 
   return {
+    /*
+     * Kept for API/frontend compatibility.
+     *
+     * This does NOT represent a database relationship between
+     * GitHubAccount and Repository.
+     */
     githubAccountId: githubAccount.id,
+
     githubUsername: githubAccount.username,
+
     totalAvailable: Number(
       data.total_count ?? repositories.length,
     ),
+
     synced,
     syncedAt,
 
-    /**
-     * `id` = SkillCompass Repository UUID
-     * `githubRepoId` = GitHub numeric repository ID
+    /*
+     * id = SkillCompass Repository UUID
+     * githubRepoId = GitHub numeric repository ID
      */
     repositories: syncedRepositories,
   };

@@ -1,11 +1,14 @@
 -- CreateEnum
-CREATE TYPE "AnalysisRunStatus" AS ENUM ('QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED');
+CREATE TYPE "AnalysisRunStatus" AS ENUM ('PENDING', 'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED');
 
 -- CreateEnum
 CREATE TYPE "ProficiencyLevel" AS ENUM ('BEGINNER', 'INTERMEDIATE', 'ADVANCED', 'EXPERT');
 
 -- CreateEnum
 CREATE TYPE "JobRequirementType" AS ENUM ('REQUIRED', 'PREFERRED');
+
+-- CreateEnum
+CREATE TYPE "JobProfileRequirementType" AS ENUM ('CORE', 'IMPORTANT', 'PREFERRED');
 
 -- CreateEnum
 CREATE TYPE "ProcessingJobType" AS ENUM ('GITHUB_SYNC', 'REPOSITORY_ANALYSIS', 'PROFICIENCY_ANALYSIS', 'JOB_SYNC', 'MATCHING', 'SKILL_GAP_ANALYSIS');
@@ -30,6 +33,8 @@ CREATE TABLE "Session" (
     "id" UUID NOT NULL,
     "userId" UUID NOT NULL,
     "tokenHash" VARCHAR(255) NOT NULL,
+    "userAgent" TEXT,
+    "ipAddress" VARCHAR(100),
     "expiresAt" TIMESTAMP(3) NOT NULL,
     "revokedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -44,7 +49,12 @@ CREATE TABLE "GitHubAccount" (
     "userId" UUID NOT NULL,
     "githubUserId" BIGINT NOT NULL,
     "username" VARCHAR(255) NOT NULL,
+    "avatarUrl" TEXT,
+    "githubInstallationId" BIGINT,
     "accessTokenEncrypted" TEXT NOT NULL,
+    "refreshTokenEncrypted" TEXT,
+    "accessTokenExpiresAt" TIMESTAMP(3),
+    "refreshTokenExpiresAt" TIMESTAMP(3),
     "connectedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -52,21 +62,35 @@ CREATE TABLE "GitHubAccount" (
 );
 
 -- CreateTable
+CREATE TABLE "GitHubOAuthState" (
+    "id" UUID NOT NULL,
+    "userId" UUID NOT NULL,
+    "stateHash" VARCHAR(128) NOT NULL,
+    "codeVerifierEncrypted" TEXT NOT NULL,
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+    "consumedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "GitHubOAuthState_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "Repository" (
     "id" UUID NOT NULL,
-    "githubAccountId" UUID NOT NULL,
+    "userId" UUID NOT NULL,
     "githubRepoId" BIGINT NOT NULL,
     "name" VARCHAR(255) NOT NULL,
     "fullName" VARCHAR(500) NOT NULL,
     "ownerLogin" VARCHAR(255) NOT NULL,
     "defaultBranch" VARCHAR(255),
     "isPrivate" BOOLEAN NOT NULL DEFAULT false,
+    "archived" BOOLEAN NOT NULL DEFAULT false,
     "htmlUrl" TEXT NOT NULL,
     "description" TEXT,
     "stars" INTEGER NOT NULL DEFAULT 0,
     "forks" INTEGER NOT NULL DEFAULT 0,
-    "archived" BOOLEAN NOT NULL DEFAULT false,
     "pushedAt" TIMESTAMP(3),
+    "lastSyncedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -77,11 +101,13 @@ CREATE TABLE "Repository" (
 CREATE TABLE "AnalysisRun" (
     "id" UUID NOT NULL,
     "userId" UUID NOT NULL,
-    "status" "AnalysisRunStatus" NOT NULL DEFAULT 'QUEUED',
+    "repositoryId" UUID NOT NULL,
+    "status" "AnalysisRunStatus" NOT NULL DEFAULT 'PENDING',
     "startedAt" TIMESTAMP(3),
     "completedAt" TIMESTAMP(3),
     "errorMessage" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "AnalysisRun_pkey" PRIMARY KEY ("id")
 );
@@ -131,6 +157,36 @@ CREATE TABLE "Skill" (
     "description" TEXT,
 
     CONSTRAINT "Skill_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "JobProfile" (
+    "id" UUID NOT NULL,
+    "slug" VARCHAR(180) NOT NULL,
+    "title" VARCHAR(255) NOT NULL,
+    "domain" VARCHAR(120) NOT NULL,
+    "description" TEXT NOT NULL,
+    "responsibilities" JSONB NOT NULL,
+    "aliases" TEXT[],
+    "source" VARCHAR(50) NOT NULL DEFAULT 'DATABASE',
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "JobProfile_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "JobProfileSkill" (
+    "id" UUID NOT NULL,
+    "jobProfileId" UUID NOT NULL,
+    "skillId" UUID NOT NULL,
+    "requirementType" "JobProfileRequirementType" NOT NULL DEFAULT 'IMPORTANT',
+    "requiredLevel" DECIMAL(6,3) NOT NULL,
+    "importance" DECIMAL(5,4) NOT NULL,
+    "aliases" TEXT[],
+
+    CONSTRAINT "JobProfileSkill_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -204,10 +260,24 @@ CREATE TABLE "JobSkill" (
 );
 
 -- CreateTable
+CREATE TABLE "JobJobProfile" (
+    "id" UUID NOT NULL,
+    "jobId" UUID NOT NULL,
+    "jobProfileId" UUID NOT NULL,
+    "classificationScore" DECIMAL(6,3) NOT NULL,
+    "classificationMethod" VARCHAR(50) NOT NULL DEFAULT 'RULE_BASED',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "JobJobProfile_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "JobMatch" (
     "id" UUID NOT NULL,
     "userId" UUID NOT NULL,
     "jobId" UUID NOT NULL,
+    "analysisRunId" UUID NOT NULL,
     "matchScore" DECIMAL(6,3) NOT NULL,
     "skillCoverage" DECIMAL(5,4) NOT NULL,
     "skillGapCount" INTEGER NOT NULL,
@@ -264,22 +334,46 @@ CREATE INDEX "Session_userId_idx" ON "Session"("userId");
 CREATE INDEX "Session_expiresAt_idx" ON "Session"("expiresAt");
 
 -- CreateIndex
+CREATE INDEX "Session_revokedAt_idx" ON "Session"("revokedAt");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "GitHubAccount_userId_key" ON "GitHubAccount"("userId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "GitHubAccount_githubUserId_key" ON "GitHubAccount"("githubUserId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Repository_githubRepoId_key" ON "Repository"("githubRepoId");
+CREATE UNIQUE INDEX "GitHubAccount_githubInstallationId_key" ON "GitHubAccount"("githubInstallationId");
 
 -- CreateIndex
-CREATE INDEX "Repository_githubAccountId_idx" ON "Repository"("githubAccountId");
+CREATE INDEX "GitHubAccount_githubUserId_idx" ON "GitHubAccount"("githubUserId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "GitHubOAuthState_stateHash_key" ON "GitHubOAuthState"("stateHash");
+
+-- CreateIndex
+CREATE INDEX "GitHubOAuthState_userId_idx" ON "GitHubOAuthState"("userId");
+
+-- CreateIndex
+CREATE INDEX "GitHubOAuthState_expiresAt_idx" ON "GitHubOAuthState"("expiresAt");
+
+-- CreateIndex
+CREATE INDEX "Repository_userId_idx" ON "Repository"("userId");
 
 -- CreateIndex
 CREATE INDEX "Repository_fullName_idx" ON "Repository"("fullName");
 
 -- CreateIndex
+CREATE INDEX "Repository_lastSyncedAt_idx" ON "Repository"("lastSyncedAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Repository_userId_githubRepoId_key" ON "Repository"("userId", "githubRepoId");
+
+-- CreateIndex
 CREATE INDEX "AnalysisRun_userId_createdAt_idx" ON "AnalysisRun"("userId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "AnalysisRun_repositoryId_createdAt_idx" ON "AnalysisRun"("repositoryId", "createdAt");
 
 -- CreateIndex
 CREATE INDEX "AnalysisRun_status_createdAt_idx" ON "AnalysisRun"("status", "createdAt");
@@ -307,6 +401,24 @@ CREATE INDEX "TechnologyEvidence_normalizedName_idx" ON "TechnologyEvidence"("no
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Skill_normalizedName_key" ON "Skill"("normalizedName");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "JobProfile_slug_key" ON "JobProfile"("slug");
+
+-- CreateIndex
+CREATE INDEX "JobProfile_domain_isActive_idx" ON "JobProfile"("domain", "isActive");
+
+-- CreateIndex
+CREATE INDEX "JobProfile_title_idx" ON "JobProfile"("title");
+
+-- CreateIndex
+CREATE INDEX "JobProfileSkill_jobProfileId_importance_idx" ON "JobProfileSkill"("jobProfileId", "importance");
+
+-- CreateIndex
+CREATE INDEX "JobProfileSkill_skillId_idx" ON "JobProfileSkill"("skillId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "JobProfileSkill_jobProfileId_skillId_key" ON "JobProfileSkill"("jobProfileId", "skillId");
 
 -- CreateIndex
 CREATE INDEX "UserSkill_userId_skillId_idx" ON "UserSkill"("userId", "skillId");
@@ -354,13 +466,25 @@ CREATE INDEX "JobSkill_skillId_idx" ON "JobSkill"("skillId");
 CREATE UNIQUE INDEX "JobSkill_jobId_skillId_key" ON "JobSkill"("jobId", "skillId");
 
 -- CreateIndex
+CREATE INDEX "JobJobProfile_jobId_classificationScore_idx" ON "JobJobProfile"("jobId", "classificationScore");
+
+-- CreateIndex
+CREATE INDEX "JobJobProfile_jobProfileId_classificationScore_idx" ON "JobJobProfile"("jobProfileId", "classificationScore");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "JobJobProfile_jobId_jobProfileId_key" ON "JobJobProfile"("jobId", "jobProfileId");
+
+-- CreateIndex
 CREATE INDEX "JobMatch_userId_matchScore_idx" ON "JobMatch"("userId", "matchScore");
 
 -- CreateIndex
 CREATE INDEX "JobMatch_jobId_idx" ON "JobMatch"("jobId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "JobMatch_userId_jobId_algorithmVersion_key" ON "JobMatch"("userId", "jobId", "algorithmVersion");
+CREATE INDEX "JobMatch_analysisRunId_idx" ON "JobMatch"("analysisRunId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "JobMatch_userId_jobId_analysisRunId_algorithmVersion_key" ON "JobMatch"("userId", "jobId", "analysisRunId", "algorithmVersion");
 
 -- CreateIndex
 CREATE INDEX "SkillGap_userId_priority_idx" ON "SkillGap"("userId", "priority");
@@ -390,10 +514,16 @@ ALTER TABLE "Session" ADD CONSTRAINT "Session_userId_fkey" FOREIGN KEY ("userId"
 ALTER TABLE "GitHubAccount" ADD CONSTRAINT "GitHubAccount_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "Repository" ADD CONSTRAINT "Repository_githubAccountId_fkey" FOREIGN KEY ("githubAccountId") REFERENCES "GitHubAccount"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "GitHubOAuthState" ADD CONSTRAINT "GitHubOAuthState_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Repository" ADD CONSTRAINT "Repository_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "AnalysisRun" ADD CONSTRAINT "AnalysisRun_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AnalysisRun" ADD CONSTRAINT "AnalysisRun_repositoryId_fkey" FOREIGN KEY ("repositoryId") REFERENCES "Repository"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "RepositorySnapshot" ADD CONSTRAINT "RepositorySnapshot_repositoryId_fkey" FOREIGN KEY ("repositoryId") REFERENCES "Repository"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -406,6 +536,12 @@ ALTER TABLE "RepositoryLanguage" ADD CONSTRAINT "RepositoryLanguage_snapshotId_f
 
 -- AddForeignKey
 ALTER TABLE "TechnologyEvidence" ADD CONSTRAINT "TechnologyEvidence_snapshotId_fkey" FOREIGN KEY ("snapshotId") REFERENCES "RepositorySnapshot"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JobProfileSkill" ADD CONSTRAINT "JobProfileSkill_jobProfileId_fkey" FOREIGN KEY ("jobProfileId") REFERENCES "JobProfile"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JobProfileSkill" ADD CONSTRAINT "JobProfileSkill_skillId_fkey" FOREIGN KEY ("skillId") REFERENCES "Skill"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "UserSkill" ADD CONSTRAINT "UserSkill_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -435,10 +571,19 @@ ALTER TABLE "JobSkill" ADD CONSTRAINT "JobSkill_jobId_fkey" FOREIGN KEY ("jobId"
 ALTER TABLE "JobSkill" ADD CONSTRAINT "JobSkill_skillId_fkey" FOREIGN KEY ("skillId") REFERENCES "Skill"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "JobJobProfile" ADD CONSTRAINT "JobJobProfile_jobId_fkey" FOREIGN KEY ("jobId") REFERENCES "Job"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JobJobProfile" ADD CONSTRAINT "JobJobProfile_jobProfileId_fkey" FOREIGN KEY ("jobProfileId") REFERENCES "JobProfile"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "JobMatch" ADD CONSTRAINT "JobMatch_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "JobMatch" ADD CONSTRAINT "JobMatch_jobId_fkey" FOREIGN KEY ("jobId") REFERENCES "Job"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "JobMatch" ADD CONSTRAINT "JobMatch_analysisRunId_fkey" FOREIGN KEY ("analysisRunId") REFERENCES "AnalysisRun"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "SkillGap" ADD CONSTRAINT "SkillGap_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;

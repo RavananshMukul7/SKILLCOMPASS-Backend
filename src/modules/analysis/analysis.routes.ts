@@ -18,56 +18,52 @@ router.post(
   analyzeRepository,
 );
 
-router.get(
-  "/latest",
-  requireAuth,
-  async (req, res, next) => {
-    try {
-      const userId = req.user?.id;
+router.get("/latest", requireAuth, async (req, res, next) => {
+  try {
+    const userId = req.user?.id;
 
-      if (!userId) {
-        res.status(401).json({
-          success: false,
-          message: "Authentication required",
-        });
-        return;
-      }
-
-      const latestRun = await prisma.analysisRun.findFirst({
-        where: {
-          userId,
-          status: "COMPLETED",
-        },
-        orderBy: {
-          completedAt: "desc",
-        },
-        select: {
-          id: true,
-          repositoryId: true,
-          status: true,
-          startedAt: true,
-          completedAt: true,
-          createdAt: true,
-        },
+    if (!userId) {
+      res.status(401).json({
+        success: false,
+        message: "Authentication required",
       });
-
-      if (!latestRun) {
-        res.status(404).json({
-          success: false,
-          message: "No completed analysis found",
-        });
-        return;
-      }
-
-      res.status(200).json({
-        success: true,
-        data: latestRun,
-      });
-    } catch (error) {
-      next(error);
+      return;
     }
-  },
-);
+
+    const latestRun = await prisma.analysisRun.findFirst({
+      where: {
+        userId,
+        status: "COMPLETED",
+      },
+      orderBy: {
+        completedAt: "desc",
+      },
+      select: {
+        id: true,
+        repositoryId: true,
+        status: true,
+        startedAt: true,
+        completedAt: true,
+        createdAt: true,
+      },
+    });
+
+    if (!latestRun) {
+      res.status(404).json({
+        success: false,
+        message: "No completed analysis found",
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: latestRun,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.get(
   "/repositories/:repositoryId/runs",
@@ -98,8 +94,7 @@ router.get(
        * Authorization:
        *
        * Repository ownership is determined directly by Repository.userId.
-       * Do not use githubAccount.userId here because githubAccountId
-       * is nullable when a GitHub connection is disconnected.
+       * GitHub connection state does not determine repository ownership.
        */
       const repository = await prisma.repository.findFirst({
         where: {
@@ -211,44 +206,37 @@ router.get(
   },
 );
 
-router.get(
-  "/runs/:analysisRunId",
-  requireAuth,
-  async (req, res, next) => {
-    try {
-      const userId = req.user?.id;
+router.get("/runs/:analysisRunId", requireAuth, async (req, res, next) => {
+  try {
+    const userId = req.user?.id;
 
-      if (!userId) {
-        res.status(401).json({
-          success: false,
-          message: "Authentication required",
-        });
-        return;
-      }
-
-      const { analysisRunId } = req.params;
-
-      if (typeof analysisRunId !== "string") {
-        res.status(400).json({
-          success: false,
-          message: "Invalid analysis run ID",
-        });
-        return;
-      }
-
-      const result = await getAnalysisResult(
-        userId,
-        analysisRunId,
-      );
-
-      res.status(200).json({
-        success: true,
-        data: result,
+    if (!userId) {
+      res.status(401).json({
+        success: false,
+        message: "Authentication required",
       });
-    } catch (error) {
-      next(error);
+      return;
     }
-  },
-);
+
+    const { analysisRunId } = req.params;
+
+    if (typeof analysisRunId !== "string") {
+      res.status(400).json({
+        success: false,
+        message: "Invalid analysis run ID",
+      });
+      return;
+    }
+
+    const result = await getAnalysisResult(userId, analysisRunId);
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 export default router;

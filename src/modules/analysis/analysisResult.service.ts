@@ -309,9 +309,8 @@ export const getAnalysisResult = async (
        * Repository is now directly owned by the SkillCompass user through
        * Repository.userId.
        *
-       * This is important because githubAccountId can become null after the
-       * user disconnects GitHub. The repository and its analysis history must
-       * still remain accessible to its original SkillCompass owner.
+       * This is important because disconnecting GitHub does not remove the
+       * repository or its analysis history from the SkillCompass user.
        */
       const storedRepository =
         await prisma.repository.findFirst({
@@ -323,23 +322,23 @@ export const getAnalysisResult = async (
             ownerLogin: true,
             name: true,
             defaultBranch: true,
-            githubAccountId: true,
           },
         });
 
       /*
-       * A disconnected repository can legitimately have no active
-       * githubAccountId. In that case we keep the stored analysis result
-       * readable and simply skip live GitHub file/commit retrieval.
+       * GitHubAccount is a user-level integration, not the owner of the
+       * repository. A disconnected repository remains readable because the
+       * repository is permanently owned by the SkillCompass user.
+       *
+       * If the user currently has GitHub connected, use that integration for
+       * supplemental live file/commit retrieval. Otherwise, keep the stored
+       * analysis result readable and skip live GitHub retrieval.
        */
-      if (
-        storedRepository &&
-        storedRepository.githubAccountId
-      ) {
+      if (storedRepository) {
         const githubAccount =
           await prisma.gitHubAccount.findUnique({
             where: {
-              id: storedRepository.githubAccountId,
+              userId,
             },
             select: {
               githubInstallationId: true,

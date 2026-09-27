@@ -46,9 +46,7 @@ const processAnalysis = async (job: Job<RepositoryAnalysisJob>) => {
     const repository = await prisma.repository.findFirst({
       where: {
         id: repositoryId,
-        githubAccount: {
-          userId,
-        },
+        userId,
       },
       select: {
         id: true,

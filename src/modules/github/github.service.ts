@@ -448,10 +448,13 @@ export const handleGitHubCallback =
  *
  * Repositories are NOT deleted.
  *
- * Because Repository.githubAccountId now uses
- * onDelete: SetNull, existing repositories
- * remain owned by the SkillCompass user while
- * their GitHub connection becomes detached.
+ * Repository ownership belongs directly to the
+ * SkillCompass user through Repository.userId.
+ *
+ * Therefore, disconnecting GitHub only removes
+ * the GitHub integration. Existing repositories,
+ * snapshots, analyses, skills, and other
+ * SkillCompass data remain owned by the user.
  */
 export const disconnectGitHub =
   async (

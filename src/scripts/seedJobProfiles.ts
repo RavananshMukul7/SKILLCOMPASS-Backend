@@ -3315,7 +3315,7 @@ async function seedJobProfile(
   );
 }
 
-async function main(): Promise<void> {
+export async function seedJobProfiles(): Promise<void> {
   console.log(
     "[Job Profiles] Starting seed...",
   );
@@ -3333,16 +3333,4 @@ async function main(): Promise<void> {
     `[Job Profiles] Completed. Seeded ${allProfiles.length} role profiles.`,
   );
 }
-
-main()
-  .catch((error) => {
-    console.error(
-      "[Job Profiles] Seed failed:",
-      error,
-    );
-
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+  

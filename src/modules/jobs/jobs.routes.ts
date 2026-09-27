@@ -71,6 +71,111 @@ const resolveActiveJobProfile = async (input: {
 };
 
 /* =========================================================
+   POST /api/jobs/sources/:sourceName/sync
+   ========================================================= */
+
+jobsRouter.post(
+  "/sources/:sourceName/sync",
+  requireAuth,
+  async (req, res, next) => {
+    try {
+      const userId = req.user?.id;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          message: "Authentication required",
+        });
+        return;
+      }
+
+      const { sourceName } = req.params;
+
+      if (typeof sourceName !== "string") {
+        res.status(400).json({
+          success: false,
+          message: "Invalid source name",
+        });
+        return;
+      }
+
+      const { syncJobSource } = await import("./jobSourceSync.service.js");
+
+      const result = await syncJobSource(sourceName);
+
+      res.status(200).json({
+        success: true,
+        data: {
+          source: result.source,
+          jobsFetched: result.jobsFetched,
+          jobsUpserted: result.jobsUpserted,
+          jobs: result.jobs.map((job) => ({
+            id: job.id,
+            title: job.title,
+            companyName: job.companyName,
+            source: job.source,
+            externalJobId: job.externalJobId,
+            skillCount: job.skills.length,
+          })),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/* =========================================================
+   POST /api/jobs/sources/sync-all
+   ========================================================= */
+
+jobsRouter.post(
+  "/sources/sync-all",
+  requireAuth,
+  async (req, res, next) => {
+    try {
+      const userId = req.user?.id;
+
+      if (!userId) {
+        res.status(401).json({
+          success: false,
+          message: "Authentication required",
+        });
+        return;
+      }
+
+      const { syncAllJobSources } = await import(
+        "./jobSourceSyncAll.service.js"
+      );
+
+      const result = await syncAllJobSources();
+
+      res.status(200).json({
+        success: true,
+        data: {
+          sourcesProcessed: result.sourcesProcessed,
+          results: result.results.map((source) => ({
+            source: source.source,
+            jobsFetched: source.jobsFetched,
+            jobsUpserted: source.jobsUpserted,
+            jobs: source.jobs.map((job) => ({
+              id: job.id,
+              title: job.title,
+              companyName: job.companyName,
+              source: job.source,
+              externalJobId: job.externalJobId,
+              skillCount: job.skills.length,
+            })),
+          })),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+/* =========================================================
    GET /api/jobs/recommended
    ========================================================= */
 
