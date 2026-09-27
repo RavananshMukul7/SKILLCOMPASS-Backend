@@ -34,7 +34,7 @@ const setSessionCookie = (
     httpOnly: true,
     secure:
       process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    sameSite: "none",
     expires: expiresAt,
     path: "/",
   });
@@ -47,7 +47,7 @@ const clearSessionCookie = (
     httpOnly: true,
     secure:
       process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    sameSite: "none",
     path: "/",
   });
 };
