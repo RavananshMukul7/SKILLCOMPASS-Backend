@@ -1,17 +1,21 @@
 import { Router } from "express";
+
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { validate } from "../../middleware/validate.js";
+
 import { analyzeRepositorySchema } from "./analysis.validation.js";
 import { analyzeRepository } from "./analysis.controller.js";
 import { getAnalysisResult } from "./analysisResult.service.js";
+
 import { prisma } from "../../config/prisma.js";
+
 const router = Router();
 
 router.post(
   "/repositories/:repositoryId/analyze",
   requireAuth,
   validate(analyzeRepositorySchema),
-  analyzeRepository
+  analyzeRepository,
 );
 
 router.get(
@@ -62,7 +66,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 router.get(
@@ -90,12 +94,17 @@ router.get(
         return;
       }
 
+      /**
+       * Authorization:
+       *
+       * Repository ownership is determined directly by Repository.userId.
+       * Do not use githubAccount.userId here because githubAccountId
+       * is nullable when a GitHub connection is disconnected.
+       */
       const repository = await prisma.repository.findFirst({
         where: {
           id: repositoryId,
-          githubAccount: {
-            userId,
-          },
+          userId,
         },
         select: {
           id: true,
@@ -140,7 +149,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 router.get(
@@ -199,7 +208,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 router.get(
@@ -229,7 +238,7 @@ router.get(
 
       const result = await getAnalysisResult(
         userId,
-        analysisRunId
+        analysisRunId,
       );
 
       res.status(200).json({
@@ -239,7 +248,7 @@ router.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 export default router;

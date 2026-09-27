@@ -1,9 +1,11 @@
 import { prisma } from "../../config/prisma.js";
 
-const MATCH_ALGORITHM_VERSION = "weighted-skill-v1";
+const MATCH_ALGORITHM_VERSION = "weighted-skill-v2";
+
 const PROFICIENCY_THRESHOLD = 40;
 
 const REQUIRED_WEIGHT_MULTIPLIER = 1;
+
 const PREFERRED_WEIGHT_MULTIPLIER = 0.5;
 
 type RequirementType = "REQUIRED" | "PREFERRED";
@@ -34,7 +36,7 @@ interface UserSkillWithSkill {
   };
 }
 
-interface CalculatedGap {
+export interface CalculatedGap {
   skillId: string;
   skillName: string;
   currentScore: number;
@@ -45,11 +47,14 @@ interface CalculatedGap {
 
 export interface JobMatchResult {
   jobId: string;
-  analysisRunId: string;
   matchScore: number;
   skillCoverage: number;
   skillGapCount: number;
   explanation: string;
+}
+
+export interface DetailedJobMatchResult extends JobMatchResult {
+  gaps: CalculatedGap[];
 }
 
 const toNumber = (value: unknown): number => {
@@ -65,10 +70,24 @@ const toNumber = (value: unknown): number => {
 const round = (value: number, decimals: number): number => {
   const multiplier = 10 ** decimals;
 
-  return Math.round((value + Number.EPSILON) * multiplier) / multiplier;
+  return (
+    Math.round((value + Number.EPSILON) * multiplier) / multiplier
+  );
 };
 
-const getRequirementMultiplier = (requirementType: RequirementType): number => {
+const normalizeSkillKey = (value: string): string => {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9+#.\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\s+/g, "-");
+};
+
+const getRequirementMultiplier = (
+  requirementType: RequirementType,
+): number => {
   return requirementType === "PREFERRED"
     ? PREFERRED_WEIGHT_MULTIPLIER
     : REQUIRED_WEIGHT_MULTIPLIER;
@@ -94,31 +113,13 @@ const buildExplanation = (
     .map((gap) => `${gap.skillName} (${gap.currentScore}/100)`)
     .join(", ");
 
-  return `${base} ` + `Missing or below-threshold skills: ${gapDetails}.`;
+  return `${base} Missing or below-threshold skills: ${gapDetails}.`;
 };
 
-export const calculateJobMatch = async (
+const calculateJobMatchInternal = async (
   userId: string,
   jobId: string,
-  analysisRunId: string,
-): Promise<JobMatchResult> => {
-  const analysisRun = await prisma.analysisRun.findFirst({
-    where: {
-      id: analysisRunId,
-      userId,
-      status: "COMPLETED",
-    },
-    select: {
-      id: true,
-    },
-  });
-
-  if (!analysisRun) {
-    throw new Error(
-      "Completed analysis run not found for the authenticated user.",
-    );
-  }
-
+): Promise<DetailedJobMatchResult> => {
   const job = await prisma.job.findUnique({
     where: {
       id: jobId,
@@ -137,9 +138,16 @@ export const calculateJobMatch = async (
   }
 
   if (job.skills.length === 0) {
-    throw new Error("Job does not contain any required or preferred skills.");
+    throw new Error(
+      "Job does not contain any required or preferred skills.",
+    );
   }
 
+  /*
+   * Live recommendations are based on the user's current persisted
+   * UserSkill profile. AnalysisRun is historical provenance and is not
+   * required to calculate the current job fit.
+   */
   const userSkills = (await prisma.userSkill.findMany({
     where: {
       userId,
@@ -150,13 +158,49 @@ export const calculateJobMatch = async (
   })) as UserSkillWithSkill[];
 
   const userScoreBySkillId = new Map<string, number>();
+  const userScoreByNormalizedName = new Map<string, number>();
 
   for (const userSkill of userSkills) {
-    userScoreBySkillId.set(
-      userSkill.skillId,
-      Math.max(0, Math.min(100, round(toNumber(userSkill.currentScore), 3))),
+    const currentScore = Math.max(
+      0,
+      Math.min(100, round(toNumber(userSkill.currentScore), 3)),
     );
+
+    userScoreBySkillId.set(userSkill.skillId, currentScore);
+
+    const normalizedName = normalizeSkillKey(
+      userSkill.skill.normalizedName,
+    );
+
+    if (normalizedName) {
+      const existingScore =
+        userScoreByNormalizedName.get(normalizedName) ?? -1;
+
+      if (currentScore > existingScore) {
+        userScoreByNormalizedName.set(normalizedName, currentScore);
+      }
+    }
   }
+
+  const getCandidateScoreForJobSkill = (
+    jobSkill: JobSkillWithSkill,
+  ): number => {
+    const scoreById = userScoreBySkillId.get(jobSkill.skillId);
+
+    if (scoreById !== undefined) {
+      return scoreById;
+    }
+
+    const normalizedName = normalizeSkillKey(
+      jobSkill.skill.normalizedName,
+    );
+
+    if (!normalizedName) {
+      return 0;
+    }
+
+    return userScoreByNormalizedName.get(normalizedName) ?? 0;
+  };
 
   let totalRequirementWeight = 0;
   let achievedRequirementWeight = 0;
@@ -171,21 +215,16 @@ export const calculateJobMatch = async (
       jobSkill.requirementType,
     );
 
-    const requirementWeight = importance * requirementMultiplier;
+    const requirementWeight =
+      importance * requirementMultiplier;
 
-    const currentScore = userScoreBySkillId.get(jobSkill.skillId) ?? 0;
-
-    console.log({
-      jobSkill: jobSkill.skill.name,
-      jobSkillId: jobSkill.skillId,
-      jobNormalizedName: jobSkill.skill.normalizedName,
-      currentScore,
-      userHasSameSkillId: userScoreBySkillId.has(jobSkill.skillId),
-    });
+    const currentScore =
+      getCandidateScoreForJobSkill(jobSkill);
 
     totalRequirementWeight += requirementWeight;
 
-    weightedSkillScore += requirementWeight * (currentScore / 100);
+    weightedSkillScore +=
+      requirementWeight * (currentScore / 100);
 
     if (currentScore >= PROFICIENCY_THRESHOLD) {
       achievedRequirementWeight += requirementWeight;
@@ -220,68 +259,102 @@ export const calculateJobMatch = async (
     4,
   );
 
-  const explanation = buildExplanation(
-    job.skills.length,
-    job.skills.length - gaps.length,
-    gaps,
+  const sortedGaps = [...gaps].sort(
+    (first, second) => second.priority - first.priority,
   );
 
-  await prisma.skillGap.deleteMany({
-    where: {
-      userId,
-      jobId,
-      analysisRunId,
-    },
-  });
-
-  if (gaps.length > 0) {
-    await prisma.skillGap.createMany({
-      data: gaps.map((gap) => ({
-        userId,
-        jobId,
-        analysisRunId,
-        skillId: gap.skillId,
-        currentScore: gap.currentScore,
-        gapScore: gap.gapScore,
-        priority: gap.priority,
-        requiredImportance: gap.importance,
-      })),
-    });
-  }
-
-  await prisma.jobMatch.upsert({
-    where: {
-      userId_jobId_analysisRunId_algorithmVersion: {
-        userId,
-        jobId,
-        analysisRunId,
-        algorithmVersion: MATCH_ALGORITHM_VERSION,
-      },
-    },
-    create: {
-      userId,
-      jobId,
-      analysisRunId,
-      matchScore,
-      skillCoverage,
-      skillGapCount: gaps.length,
-      explanation,
-      algorithmVersion: MATCH_ALGORITHM_VERSION,
-    },
-    update: {
-      matchScore,
-      skillCoverage,
-      skillGapCount: gaps.length,
-      explanation,
-    },
-  });
+  const explanation = buildExplanation(
+    job.skills.length,
+    job.skills.length - sortedGaps.length,
+    sortedGaps,
+  );
 
   return {
     jobId,
-    analysisRunId,
     matchScore,
     skillCoverage,
-    skillGapCount: gaps.length,
+    skillGapCount: sortedGaps.length,
     explanation,
+    gaps: sortedGaps,
   };
 };
+
+export const calculateJobMatch = async (
+  userId: string,
+  jobId: string,
+): Promise<JobMatchResult> => {
+  const result = await calculateJobMatchInternal(
+    userId,
+    jobId,
+  );
+
+  return {
+    jobId: result.jobId,
+    matchScore: result.matchScore,
+    skillCoverage: result.skillCoverage,
+    skillGapCount: result.skillGapCount,
+    explanation: result.explanation,
+  };
+};
+
+export const calculateDetailedJobMatch = async (
+  userId: string,
+  jobId: string,
+): Promise<DetailedJobMatchResult> => {
+  return calculateJobMatchInternal(userId, jobId);
+};
+
+export const calculateJobRecommendations = async (
+  userId: string,
+  jobIds: string[],
+): Promise<DetailedJobMatchResult[]> => {
+  const uniqueJobIds = [
+    ...new Set(
+      jobIds.filter((jobId) => jobId.trim().length > 0),
+    ),
+  ];
+
+  if (uniqueJobIds.length === 0) {
+    return [];
+  }
+
+  const results: DetailedJobMatchResult[] = [];
+
+  for (const jobId of uniqueJobIds) {
+    try {
+      const result = await calculateJobMatchInternal(
+        userId,
+        jobId,
+      );
+
+      results.push(result);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "Job not found."
+      ) {
+        continue;
+      }
+
+      if (
+        error instanceof Error &&
+        error.message ===
+          "Job does not contain any required or preferred skills."
+      ) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  return results.sort(
+    (first, second) =>
+      second.matchScore - first.matchScore ||
+      second.skillCoverage - first.skillCoverage ||
+      first.skillGapCount - second.skillGapCount,
+  );
+};
+
+export const matchAlgorithmVersion =
+  MATCH_ALGORITHM_VERSION;

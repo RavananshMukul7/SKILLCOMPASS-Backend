@@ -30,7 +30,7 @@ interface GitHubUser {
 }
 
 const createRandomToken = (
-  bytes = 32
+  bytes = 32,
 ): string => {
   return crypto
     .randomBytes(bytes)
@@ -38,7 +38,7 @@ const createRandomToken = (
 };
 
 const hashState = (
-  state: string
+  state: string,
 ): string => {
   return crypto
     .createHash("sha256")
@@ -47,7 +47,7 @@ const hashState = (
 };
 
 const createCodeChallenge = (
-  verifier: string
+  verifier: string,
 ): string => {
   return crypto
     .createHash("sha256")
@@ -56,25 +56,22 @@ const createCodeChallenge = (
 };
 
 const githubApiHeaders = {
-  Accept:
-    "application/vnd.github+json",
-  "X-GitHub-Api-Version":
-    "2026-03-10",
+  Accept: "application/vnd.github+json",
+  "X-GitHub-Api-Version": "2026-03-10",
 };
 
 export const createGitHubAuthorizationUrl =
   async (
-    userId: string
+    userId: string,
   ): Promise<string> => {
-    const state =
-      createRandomToken(32);
+    const state = createRandomToken(32);
 
     const codeVerifier =
       createRandomToken(32);
 
     const codeChallenge =
       createCodeChallenge(
-        codeVerifier
+        codeVerifier,
       );
 
     const stateHash =
@@ -88,24 +85,37 @@ export const createGitHubAuthorizationUrl =
           encrypt(codeVerifier),
         expiresAt: new Date(
           Date.now() +
-            OAUTH_STATE_DURATION_MS
+            OAUTH_STATE_DURATION_MS,
         ),
       },
     });
 
-    const params =
-      new URLSearchParams({
-        client_id:
-          githubConfig.clientId,
-        redirect_uri:
-          githubConfig.callbackUrl,
-        state,
-        code_challenge:
-          codeChallenge,
-        code_challenge_method:
-          "S256",
-        allow_signup: "false",
-      });
+    const params = new URLSearchParams({
+      client_id:
+        githubConfig.clientId,
+
+      redirect_uri:
+        githubConfig.callbackUrl,
+
+      state,
+
+      code_challenge:
+        codeChallenge,
+
+      code_challenge_method:
+        "S256",
+
+      allow_signup: "false",
+
+      /*
+       * Force GitHub's account picker to appear.
+       *
+       * This is especially important when testing
+       * multiple SkillCompass accounts with different
+       * GitHub identities.
+       */
+      prompt: "select_account",
+    });
 
     return `https://github.com/login/oauth/authorize?${params.toString()}`;
   };
@@ -113,7 +123,7 @@ export const createGitHubAuthorizationUrl =
 const exchangeAuthorizationCode =
   async (
     code: string,
-    codeVerifier: string
+    codeVerifier: string,
   ): Promise<GitHubTokenResponse> => {
     let response: Response;
 
@@ -122,36 +132,43 @@ const exchangeAuthorizationCode =
         "https://github.com/login/oauth/access_token",
         {
           method: "POST",
+
           headers: {
             Accept:
               "application/json",
+
             "Content-Type":
               "application/json",
           },
+
           body: JSON.stringify({
             client_id:
               githubConfig.clientId,
+
             client_secret:
               githubConfig.clientSecret,
+
             code,
+
             redirect_uri:
               githubConfig.callbackUrl,
+
             code_verifier:
               codeVerifier,
           }),
-        }
+        },
       );
     } catch {
       throw new AppError(
         "Unable to connect to GitHub",
-        502
+        502,
       );
     }
 
     if (!response.ok) {
       throw new AppError(
         "GitHub authorization code exchange failed",
-        502
+        502,
       );
     }
 
@@ -161,51 +178,51 @@ const exchangeAuthorizationCode =
     if (!data.access_token) {
       throw new AppError(
         "GitHub did not return an access token",
-        502
+        502,
       );
     }
 
     return data;
   };
 
-const getGitHubUser =
-  async (
-    accessToken: string
-  ): Promise<GitHubUser> => {
-    let response: Response;
+const getGitHubUser = async (
+  accessToken: string,
+): Promise<GitHubUser> => {
+  let response: Response;
 
-    try {
-      response = await fetch(
-        "https://api.github.com/user",
-        {
-          headers: {
-            ...githubApiHeaders,
-            Authorization:
-              `Bearer ${accessToken}`,
-          },
-        }
-      );
-    } catch {
-      throw new AppError(
-        "Unable to connect to GitHub",
-        502
-      );
-    }
+  try {
+    response = await fetch(
+      "https://api.github.com/user",
+      {
+        headers: {
+          ...githubApiHeaders,
 
-    if (!response.ok) {
-      throw new AppError(
-        "Unable to retrieve GitHub user",
-        502
-      );
-    }
+          Authorization:
+            `Bearer ${accessToken}`,
+        },
+      },
+    );
+  } catch {
+    throw new AppError(
+      "Unable to connect to GitHub",
+      502,
+    );
+  }
 
-    return (await response.json()) as GitHubUser;
-  };
+  if (!response.ok) {
+    throw new AppError(
+      "Unable to retrieve GitHub user",
+      502,
+    );
+  }
+
+  return (await response.json()) as GitHubUser;
+};
 
 export const handleGitHubCallback =
   async (
     code: string,
-    state: string
+    state: string,
   ) => {
     const stateHash =
       hashState(state);
@@ -220,14 +237,14 @@ export const handleGitHubCallback =
     if (!oauthState) {
       throw new AppError(
         "Invalid GitHub OAuth state",
-        400
+        400,
       );
     }
 
     if (oauthState.consumedAt) {
       throw new AppError(
         "GitHub OAuth state has already been used",
-        400
+        400,
       );
     }
 
@@ -237,11 +254,11 @@ export const handleGitHubCallback =
     ) {
       throw new AppError(
         "GitHub OAuth state has expired",
-        400
+        400,
       );
     }
 
-    /*
+    /**
      * Consume the state before exchanging
      * the authorization code.
      *
@@ -257,6 +274,7 @@ export const handleGitHubCallback =
             gt: new Date(),
           },
         },
+
         data: {
           consumedAt: new Date(),
         },
@@ -265,7 +283,7 @@ export const handleGitHubCallback =
     if (consumedState.count !== 1) {
       throw new AppError(
         "GitHub OAuth state is no longer valid",
-        400
+        400,
       );
     }
 
@@ -274,21 +292,21 @@ export const handleGitHubCallback =
 
     const codeVerifier =
       decrypt(
-        oauthState.codeVerifierEncrypted
+        oauthState.codeVerifierEncrypted,
       );
 
     const token =
       await exchangeAuthorizationCode(
         code,
-        codeVerifier
+        codeVerifier,
       );
 
     const githubUser =
       await getGitHubUser(
-        token.access_token
+        token.access_token,
       );
 
-    /*
+    /**
      * Check whether this GitHub account
      * is already connected to another
      * SkillCompass account.
@@ -299,6 +317,7 @@ export const handleGitHubCallback =
           githubUserId:
             BigInt(githubUser.id),
         },
+
         select: {
           id: true,
           userId: true,
@@ -312,20 +331,21 @@ export const handleGitHubCallback =
     ) {
       throw new AppError(
         "This GitHub account is already connected to another SkillCompass account",
-        409
+        409,
       );
     }
 
     const installation =
       await findSkillCompassInstallation(
-        githubUser.login
+        githubUser.login,
       );
 
     const accessTokenExpiresAt =
       token.expires_in !== undefined
         ? new Date(
             Date.now() +
-              token.expires_in * 1000
+              token.expires_in *
+                1000,
           )
         : null;
 
@@ -335,11 +355,11 @@ export const handleGitHubCallback =
         ? new Date(
             Date.now() +
               token.refresh_token_expires_in *
-                1000
+                1000,
           )
         : null;
 
-    /*
+    /**
      * Create the GitHub account if the
      * SkillCompass user does not have one.
      *
@@ -369,13 +389,13 @@ export const handleGitHubCallback =
 
           accessTokenEncrypted:
             encrypt(
-              token.access_token
+              token.access_token,
             ),
 
           refreshTokenEncrypted:
             token.refresh_token
               ? encrypt(
-                  token.refresh_token
+                  token.refresh_token,
                 )
               : null,
 
@@ -399,14 +419,14 @@ export const handleGitHubCallback =
 
           accessTokenEncrypted:
             encrypt(
-              token.access_token
+              token.access_token,
             ),
 
           ...(token.refresh_token
             ? {
                 refreshTokenEncrypted:
                   encrypt(
-                    token.refresh_token
+                    token.refresh_token,
                   ),
               }
             : {}),
@@ -418,4 +438,59 @@ export const handleGitHubCallback =
       });
 
     return githubAccount;
+  };
+
+/**
+ * Disconnect the GitHub account belonging
+ * to the currently authenticated SkillCompass user.
+ *
+ * The GitHubAccount row is deleted.
+ *
+ * Repositories are NOT deleted.
+ *
+ * Because Repository.githubAccountId now uses
+ * onDelete: SetNull, existing repositories
+ * remain owned by the SkillCompass user while
+ * their GitHub connection becomes detached.
+ */
+export const disconnectGitHub =
+  async (
+    userId: string,
+  ): Promise<{
+    disconnected: boolean;
+  }> => {
+    const githubAccount =
+      await prisma.gitHubAccount.findUnique({
+        where: {
+          userId,
+        },
+
+        select: {
+          id: true,
+        },
+      });
+
+    if (!githubAccount) {
+      return {
+        disconnected: false,
+      };
+    }
+
+    await prisma.$transaction([
+      prisma.gitHubOAuthState.deleteMany({
+        where: {
+          userId,
+        },
+      }),
+
+      prisma.gitHubAccount.delete({
+        where: {
+          userId,
+        },
+      }),
+    ]);
+
+    return {
+      disconnected: true,
+    };
   };

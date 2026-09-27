@@ -1,5 +1,7 @@
 import type { JobSource } from "./jobSource.types.js";
+
 import { upsertJob } from "./jobIngestion.service.js";
+
 import { extractJobSkills } from "./jobSkillExtraction.service.js";
 
 export const runJobSource = async (source: JobSource) => {
@@ -8,13 +10,24 @@ export const runJobSource = async (source: JobSource) => {
   const results = [];
 
   for (const externalJob of externalJobs) {
-    const skills =
-      externalJob.skills && externalJob.skills.length > 0
-        ? externalJob.skills
-        : extractJobSkills(
-            externalJob.title,
-            externalJob.description
-          );
+    const extractedSkills = extractJobSkills(
+      externalJob.title,
+      externalJob.description,
+    );
+
+    const sourceSkills = externalJob.skills ?? [];
+
+    const skillsByNormalizedName = new Map(
+      sourceSkills.map((skill) => [skill.normalizedName, skill]),
+    );
+
+    for (const skill of extractedSkills) {
+      if (!skillsByNormalizedName.has(skill.normalizedName)) {
+        skillsByNormalizedName.set(skill.normalizedName, skill);
+      }
+    }
+
+    const skills = Array.from(skillsByNormalizedName.values());
 
     const job = await upsertJob({
       source: source.name,

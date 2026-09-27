@@ -2,7 +2,11 @@ import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../../config/prisma.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
-import { calculateJobMatch } from "../matching/jobMatching.service.js";
+import {
+  calculateDetailedJobMatch,
+  calculateJobRecommendations,
+  matchAlgorithmVersion,
+} from "../matching/jobMatching.service.js";
 
 export const jobsRouter = Router();
 
@@ -15,104 +19,56 @@ const jobsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
 
-/* =========================================================
-   POST /api/jobs/sources/:sourceName/sync
-   ========================================================= */
+const recommendationFilterSchema = z
+  .object({
+    jobProfileId: z.string().uuid().optional(),
+    jobProfileSlug: z.string().trim().min(1).optional(),
+    minScore: z.coerce.number().min(0).max(100).default(0),
+  })
+  .refine(
+    (value) => Boolean(value.jobProfileId) !== Boolean(value.jobProfileSlug),
+    {
+      message: "Exactly one of jobProfileId or jobProfileSlug is required",
+      path: ["jobProfileId"],
+    },
+  );
 
-jobsRouter.post(
-  "/sources/:sourceName/sync",
-  requireAuth,
-  async (req, res, next) => {
-    try {
-      const userId = req.user?.id;
-
-      if (!userId) {
-        res.status(401).json({
-          success: false,
-          message: "Authentication required",
-        });
-        return;
-      }
-
-      const { sourceName } = req.params;
-
-      if (typeof sourceName !== "string") {
-        res.status(400).json({
-          success: false,
-          message: "Invalid source name",
-        });
-        return;
-      }
-
-      const { syncJobSource } = await import("./jobSourceSync.service.js");
-
-      const result = await syncJobSource(sourceName);
-
-      res.status(200).json({
-        success: true,
-        data: {
-          source: result.source,
-          jobsFetched: result.jobsFetched,
-          jobsUpserted: result.jobsUpserted,
-          jobs: result.jobs.map((job) => ({
-            id: job.id,
-            title: job.title,
-            companyName: job.companyName,
-            source: job.source,
-            externalJobId: job.externalJobId,
-            skillCount: job.skills.length,
-          })),
-        },
-      });
-    } catch (error) {
-      next(error);
-    }
-  },
-);
-
-/* =========================================================
-   POST /api/jobs/sources/sync-all
-   ========================================================= */
-
-jobsRouter.post("/sources/sync-all", requireAuth, async (req, res, next) => {
-  try {
-    const userId = req.user?.id;
-
-    if (!userId) {
-      res.status(401).json({
-        success: false,
-        message: "Authentication required",
-      });
-      return;
-    }
-
-    const { syncAllJobSources } = await import("./jobSourceSyncAll.service.js");
-
-    const result = await syncAllJobSources();
-
-    res.status(200).json({
-      success: true,
-      data: {
-        sourcesProcessed: result.sourcesProcessed,
-        results: result.results.map((source) => ({
-          source: source.source,
-          jobsFetched: source.jobsFetched,
-          jobsUpserted: source.jobsUpserted,
-          jobs: source.jobs.map((job) => ({
-            id: job.id,
-            title: job.title,
-            companyName: job.companyName,
-            source: job.source,
-            externalJobId: job.externalJobId,
-            skillCount: job.skills.length,
-          })),
-        })),
+const resolveActiveJobProfile = async (input: {
+  jobProfileId?: string;
+  jobProfileSlug?: string;
+}) => {
+  if (input.jobProfileId) {
+    return prisma.jobProfile.findFirst({
+      where: {
+        id: input.jobProfileId,
+        isActive: true,
+      },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        domain: true,
       },
     });
-  } catch (error) {
-    next(error);
   }
-});
+
+  if (input.jobProfileSlug) {
+    return prisma.jobProfile.findFirst({
+      where: {
+        slug: input.jobProfileSlug,
+        isActive: true,
+      },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        domain: true,
+      },
+    });
+  }
+
+  return null;
+};
 
 /* =========================================================
    GET /api/jobs/recommended
@@ -130,94 +86,131 @@ jobsRouter.get("/recommended", requireAuth, async (req, res, next) => {
       return;
     }
 
-    const analysisRunId = req.query.analysisRunId;
+    const parsedRecommendationFilter =
+      recommendationFilterSchema.safeParse({
+        jobProfileId: req.query.jobProfileId,
+        jobProfileSlug: req.query.jobProfileSlug,
+        minScore: req.query.minScore,
+      });
 
-    if (typeof analysisRunId !== "string") {
+    if (!parsedRecommendationFilter.success) {
       res.status(400).json({
         success: false,
-        message: "analysisRunId query parameter is required",
+        message: "Exactly one job profile selector is required",
+        errors: parsedRecommendationFilter.error.flatten(),
       });
       return;
     }
 
-    const minScoreParam = req.query.minScore;
+    const {
+      jobProfileId,
+      jobProfileSlug,
+      minScore,
+    } = parsedRecommendationFilter.data;
 
-    const minScore =
-      typeof minScoreParam === "string" ? Number(minScoreParam) : 0;
+    const jobProfile = await resolveActiveJobProfile({
+      jobProfileId,
+      jobProfileSlug,
+    });
 
-    if (!Number.isFinite(minScore) || minScore < 0 || minScore > 100) {
-      res.status(400).json({
+    if (!jobProfile) {
+      res.status(404).json({
         success: false,
-        message: "minScore must be a number between 0 and 100",
+        message: "Active job profile not found",
       });
       return;
     }
 
-    const analysisRun = await prisma.analysisRun.findFirst({
+    /*
+     * Job Recommendations are calculated live from the user's
+     * current persisted UserSkill profile.
+     *
+     * AnalysisRun is historical provenance only and is not used
+     * to generate or filter current recommendations.
+     */
+    const jobs = await prisma.job.findMany({
       where: {
-        id: analysisRunId,
-        userId,
-        status: "COMPLETED",
+        skills: {
+          some: {},
+        },
+        jobProfiles: {
+          some: {
+            jobProfileId: jobProfile.id,
+          },
+        },
       },
       select: {
         id: true,
       },
     });
 
-    if (!analysisRun) {
-      res.status(404).json({
-        success: false,
-        message: "Completed analysis run not found",
-      });
-      return;
-    }
-
-    const matches = await prisma.jobMatch.findMany({
-      where: {
+    const calculatedRecommendations = (
+      await calculateJobRecommendations(
         userId,
-        analysisRunId,
-        algorithmVersion: "weighted-skill-v1",
-        matchScore: {
-          gte: minScore,
-        },
-      },
-      orderBy: {
-        matchScore: "desc",
-      },
-      take: 20,
-      include: {
-        job: {
-          select: {
-            id: true,
-            source: true,
-            externalJobId: true,
-            title: true,
-            companyName: true,
-            location: true,
-            employmentType: true,
-            remote: true,
-            url: true,
-            description: true,
-            postedAt: true,
-            expiresAt: true,
-          },
-        },
-      },
-    });
+        jobs.map((job) => job.id),
+      )
+    )
+      .filter(
+        (recommendation) => recommendation.matchScore >= minScore,
+      )
+      .slice(0, 20);
+
+    const recommendedJobIds = calculatedRecommendations.map(
+      (recommendation) => recommendation.jobId,
+    );
+
+    const recommendedJobs =
+      recommendedJobIds.length > 0
+        ? await prisma.job.findMany({
+            where: {
+              id: {
+                in: recommendedJobIds,
+              },
+            },
+            select: {
+              id: true,
+              source: true,
+              externalJobId: true,
+              title: true,
+              companyName: true,
+              location: true,
+              employmentType: true,
+              remote: true,
+              url: true,
+              description: true,
+              postedAt: true,
+              expiresAt: true,
+            },
+          })
+        : [];
+
+    const jobById = new Map(
+      recommendedJobs.map((job) => [job.id, job]),
+    );
 
     res.status(200).json({
       success: true,
-      data: matches.map((match) => ({
-        id: match.id,
-        analysisRunId,
-        matchScore: Number(match.matchScore),
-        skillCoverage: Number(match.skillCoverage),
-        skillGapCount: match.skillGapCount,
-        explanation: match.explanation,
-        algorithmVersion: match.algorithmVersion,
-        updatedAt: match.updatedAt,
-        job: match.job,
-      })),
+      data: {
+        jobProfile: {
+          id: jobProfile.id,
+          slug: jobProfile.slug,
+          title: jobProfile.title,
+          domain: jobProfile.domain,
+        },
+        jobsEvaluated: jobs.length,
+        matchesGenerated: calculatedRecommendations.length,
+        recommendations: calculatedRecommendations.map(
+          (recommendation) => ({
+            jobId: recommendation.jobId,
+            matchScore: recommendation.matchScore,
+            skillCoverage: recommendation.skillCoverage,
+            skillGapCount: recommendation.skillGapCount,
+            explanation: recommendation.explanation,
+            gaps: recommendation.gaps,
+            job: jobById.get(recommendation.jobId) ?? null,
+          }),
+        ),
+      },
     });
   } catch (error) {
     next(error);
@@ -243,98 +236,127 @@ jobsRouter.post(
         return;
       }
 
-      const analysisRunId = req.body?.analysisRunId;
+      const parsedRecommendationFilter =
+        recommendationFilterSchema.safeParse({
+          jobProfileId: req.body?.jobProfileId,
+          jobProfileSlug: req.body?.jobProfileSlug,
+          minScore: req.body?.minScore ?? 0,
+        });
 
-      if (
-        typeof analysisRunId !== "string" ||
-        !/^[0-9a-fA-F-]{36}$/.test(analysisRunId)
-      ) {
+      if (!parsedRecommendationFilter.success) {
         res.status(400).json({
           success: false,
-          message: "A valid analysisRunId is required",
+          message: "Exactly one job profile selector is required",
+          errors: parsedRecommendationFilter.error.flatten(),
         });
         return;
       }
 
-      const analysisRun = await prisma.analysisRun.findFirst({
-        where: {
-          id: analysisRunId,
-          userId,
-          status: "COMPLETED",
-        },
-        select: {
-          id: true,
-        },
+      const {
+        jobProfileId,
+        jobProfileSlug,
+        minScore,
+      } = parsedRecommendationFilter.data;
+
+      const jobProfile = await resolveActiveJobProfile({
+        jobProfileId,
+        jobProfileSlug,
       });
 
-      if (!analysisRun) {
+      if (!jobProfile) {
         res.status(404).json({
           success: false,
-          message: "Completed analysis run not found",
+          message: "Active job profile not found",
         });
         return;
       }
 
+      /*
+       * Generate also uses the current persisted UserSkill profile.
+       * No AnalysisRun or recommendation identifier is required.
+       */
       const jobs = await prisma.job.findMany({
         where: {
           skills: {
             some: {},
           },
+          jobProfiles: {
+            some: {
+              jobProfileId: jobProfile.id,
+            },
+          },
         },
         select: {
           id: true,
         },
       });
 
-      const generatedMatches = [];
+      const generatedRecommendations = (
+        await calculateJobRecommendations(
+          userId,
+          jobs.map((job) => job.id),
+        )
+      )
+        .filter(
+          (recommendation) => recommendation.matchScore >= minScore,
+        )
+        .slice(0, 20);
 
-      for (const job of jobs) {
-        await calculateJobMatch(userId, job.id, analysisRunId);
+      const recommendedJobIds = generatedRecommendations.map(
+        (recommendation) => recommendation.jobId,
+      );
 
-        const savedMatch = await prisma.jobMatch.findUnique({
-          where: {
-            userId_jobId_analysisRunId_algorithmVersion: {
-              userId,
-              jobId: job.id,
-              analysisRunId,
-              algorithmVersion: "weighted-skill-v1",
-            },
-          },
-          select: {
-            jobId: true,
-            analysisRunId: true,
-            matchScore: true,
-            skillCoverage: true,
-            skillGapCount: true,
-            explanation: true,
-            algorithmVersion: true,
-            updatedAt: true,
-          },
-        });
+      const recommendedJobs =
+        recommendedJobIds.length > 0
+          ? await prisma.job.findMany({
+              where: {
+                id: {
+                  in: recommendedJobIds,
+                },
+              },
+              select: {
+                id: true,
+                source: true,
+                externalJobId: true,
+                title: true,
+                companyName: true,
+                location: true,
+                employmentType: true,
+                remote: true,
+                url: true,
+                description: true,
+                postedAt: true,
+                expiresAt: true,
+              },
+            })
+          : [];
 
-        if (savedMatch) {
-          generatedMatches.push({
-            jobId: savedMatch.jobId,
-            analysisRunId: savedMatch.analysisRunId,
-            matchScore: Number(savedMatch.matchScore),
-            skillCoverage: Number(savedMatch.skillCoverage),
-            skillGapCount: savedMatch.skillGapCount,
-            explanation: savedMatch.explanation,
-            algorithmVersion: savedMatch.algorithmVersion,
-            updatedAt: savedMatch.updatedAt,
-          });
-        }
-      }
-
-      generatedMatches.sort((a, b) => b.matchScore - a.matchScore);
+      const jobById = new Map(
+        recommendedJobs.map((job) => [job.id, job]),
+      );
 
       res.status(200).json({
         success: true,
         data: {
-          analysisRunId,
+          jobProfile: {
+            id: jobProfile.id,
+            slug: jobProfile.slug,
+            title: jobProfile.title,
+            domain: jobProfile.domain,
+          },
           jobsEvaluated: jobs.length,
-          matchesGenerated: generatedMatches.length,
-          recommendations: generatedMatches,
+          matchesGenerated: generatedRecommendations.length,
+          recommendations: generatedRecommendations.map(
+            (recommendation) => ({
+              jobId: recommendation.jobId,
+              matchScore: recommendation.matchScore,
+              skillCoverage: recommendation.skillCoverage,
+              skillGapCount: recommendation.skillGapCount,
+              explanation: recommendation.explanation,
+              gaps: recommendation.gaps,
+              job: jobById.get(recommendation.jobId) ?? null,
+            }),
+          ),
         },
       });
     } catch (error) {
@@ -369,8 +391,6 @@ jobsRouter.get("/:jobId", requireAuth, async (req, res, next) => {
       return;
     }
 
-    const analysisRunId = req.query.analysisRunId;
-
     const job = await prisma.job.findUnique({
       where: {
         id: jobId,
@@ -392,31 +412,16 @@ jobsRouter.get("/:jobId", requireAuth, async (req, res, next) => {
       return;
     }
 
-    const match = await prisma.jobMatch.findFirst({
-      where: {
+    let liveMatch: Awaited<
+      ReturnType<typeof calculateDetailedJobMatch>
+    > | null = null;
+
+    if (job.skills.length > 0) {
+      liveMatch = await calculateDetailedJobMatch(
         userId,
         jobId,
-        algorithmVersion: "weighted-skill-v1",
-        ...(typeof analysisRunId === "string" ? { analysisRunId } : {}),
-      },
-    });
-
-    const gaps =
-      typeof analysisRunId === "string"
-        ? await prisma.skillGap.findMany({
-            where: {
-              userId,
-              jobId,
-              analysisRunId,
-            },
-            include: {
-              skill: true,
-            },
-            orderBy: {
-              priority: "desc",
-            },
-          })
-        : [];
+      );
+    }
 
     res.status(200).json({
       success: true,
@@ -445,28 +450,26 @@ jobsRouter.get("/:jobId", requireAuth, async (req, res, next) => {
           importance: Number(jobSkill.importance),
         })),
 
-        match: match
+        match: liveMatch
           ? {
-              id: match.id,
-              matchScore: Number(match.matchScore),
-              skillCoverage: Number(match.skillCoverage),
-              skillGapCount: match.skillGapCount,
-              explanation: match.explanation,
-              algorithmVersion: match.algorithmVersion,
-              analysisRunId: match.analysisRunId,
+              matchScore: liveMatch.matchScore,
+              skillCoverage: liveMatch.skillCoverage,
+              skillGapCount: liveMatch.skillGapCount,
+              explanation: liveMatch.explanation,
+              algorithmVersion: matchAlgorithmVersion,
             }
           : null,
 
-        gaps: gaps.map((gap) => ({
-          id: gap.id,
-          skillId: gap.skillId,
-          skillName: gap.skill.name,
-          currentScore: Number(gap.currentScore),
-          requiredImportance: Number(gap.requiredImportance),
-          gapScore: Number(gap.gapScore),
-          priority: Number(gap.priority),
-          analysisRunId: gap.analysisRunId,
-        })),
+        gaps:
+          liveMatch?.gaps.map((gap) => ({
+            id: `${job.id}-${gap.skillId}`,
+            skillId: gap.skillId,
+            skillName: gap.skillName,
+            currentScore: gap.currentScore,
+            requiredImportance: gap.importance,
+            gapScore: gap.gapScore,
+            priority: gap.priority,
+          })) ?? [],
       },
     });
   } catch (error) {
@@ -535,25 +538,17 @@ jobsRouter.get("/", requireAuth, async (req, res, next) => {
             skill: true,
           },
         },
-        matches: {
-          where: {
-            userId,
-            algorithmVersion: "weighted-skill-v1",
-          },
-          select: {
-            matchScore: true,
-            skillCoverage: true,
-            skillGapCount: true,
-            algorithmVersion: true,
-            analysisRunId: true,
-          },
-          orderBy: {
-            updatedAt: "desc",
-          },
-          take: 1,
-        },
       },
     });
+
+    const liveMatches = await calculateJobRecommendations(
+      userId,
+      jobs.map((job) => job.id),
+    );
+
+    const liveMatchByJobId = new Map(
+      liveMatches.map((match) => [match.jobId, match]),
+    );
 
     res.status(200).json({
       success: true,
@@ -579,13 +574,17 @@ jobsRouter.get("/", requireAuth, async (req, res, next) => {
           importance: Number(jobSkill.importance),
         })),
 
-        match: job.matches[0]
+        match: liveMatchByJobId.has(job.id)
           ? {
-              matchScore: Number(job.matches[0].matchScore),
-              skillCoverage: Number(job.matches[0].skillCoverage),
-              skillGapCount: job.matches[0].skillGapCount,
-              algorithmVersion: job.matches[0].algorithmVersion,
-              analysisRunId: job.matches[0].analysisRunId,
+              matchScore: Number(
+                liveMatchByJobId.get(job.id)?.matchScore ?? 0,
+              ),
+              skillCoverage: Number(
+                liveMatchByJobId.get(job.id)?.skillCoverage ?? 0,
+              ),
+              skillGapCount:
+                liveMatchByJobId.get(job.id)?.skillGapCount ?? 0,
+              algorithmVersion: matchAlgorithmVersion,
             }
           : null,
       })),

@@ -4,14 +4,25 @@ import { AppError } from "../../utils/AppError.js";
 
 export const startRepositoryAnalysis = async (
   userId: string,
-  repositoryId: string
+  repositoryId: string,
 ) => {
+  /**
+   * Authorization:
+   *
+   * A repository belongs to a SkillCompass user through Repository.userId.
+   *
+   * We must authorize using both:
+   *   - repositoryId
+   *   - userId
+   *
+   * Do not rely on githubAccount.userId because githubAccountId
+   * is nullable and repositories are intentionally preserved after
+   * a GitHub account is disconnected.
+   */
   const repository = await prisma.repository.findFirst({
     where: {
       id: repositoryId,
-      githubAccount: {
-        userId,
-      },
+      userId,
     },
     select: {
       id: true,
@@ -23,6 +34,10 @@ export const startRepositoryAnalysis = async (
     throw new AppError("Repository not found", 404);
   }
 
+  /**
+   * Prevent multiple active analyses for the same repository
+   * belonging to the authenticated user.
+   */
   const existingRun = await prisma.analysisRun.findFirst({
     where: {
       repositoryId: repository.id,
@@ -39,10 +54,13 @@ export const startRepositoryAnalysis = async (
   if (existingRun) {
     throw new AppError(
       "An analysis is already running for this repository",
-      409
+      409,
     );
   }
 
+  /**
+   * Create the analysis run under the authenticated user.
+   */
   const analysisRun = await prisma.analysisRun.create({
     data: {
       userId,
@@ -52,6 +70,10 @@ export const startRepositoryAnalysis = async (
   });
 
   try {
+    /**
+     * Queue the analysis job with the authenticated user's
+     * identity and the authorized SkillCompass repository ID.
+     */
     await analysisQueue.add(
       "analyze-repository",
       {
@@ -63,7 +85,7 @@ export const startRepositoryAnalysis = async (
         jobId: analysisRun.id,
         removeOnComplete: 100,
         removeOnFail: 100,
-      }
+      },
     );
 
     await prisma.analysisRun.update({

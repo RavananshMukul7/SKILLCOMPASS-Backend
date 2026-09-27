@@ -27,6 +27,12 @@ enum JobRequirementType {
   PREFERRED
 }
 
+enum JobProfileRequirementType {
+  CORE
+  IMPORTANT
+  PREFERRED
+}
+
 enum ProcessingJobType {
   GITHUB_SYNC
   REPOSITORY_ANALYSIS
@@ -55,6 +61,7 @@ model User {
   sessions          Session[]
   githubAccount     GitHubAccount?
   githubOAuthStates GitHubOAuthState[]
+  repositories      Repository[]
   analysisRuns      AnalysisRun[]
   userSkills        UserSkill[]
   jobMatches        JobMatch[]
@@ -122,9 +129,10 @@ model GitHubOAuthState {
 }
 
 model Repository {
-  id              String @id @default(uuid()) @db.Uuid
-  githubAccountId String @db.Uuid
-  githubRepoId    BigInt @unique
+  id              String  @id @default(uuid()) @db.Uuid
+  userId          String  @db.Uuid
+  githubAccountId String? @db.Uuid
+  githubRepoId    BigInt
 
   name       String @db.VarChar(255)
   fullName   String @db.VarChar(500)
@@ -147,10 +155,13 @@ model Repository {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  githubAccount GitHubAccount        @relation(fields: [githubAccountId], references: [id], onDelete: Cascade)
+  user          User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  githubAccount GitHubAccount?       @relation(fields: [githubAccountId], references: [id], onDelete: SetNull)
   analysisRuns  AnalysisRun[]
   snapshots     RepositorySnapshot[]
 
+  @@unique([userId, githubRepoId])
+  @@index([userId])
   @@index([githubAccountId])
   @@index([fullName])
   @@index([lastSyncedAt])
@@ -240,9 +251,47 @@ model Skill {
   category       String? @db.VarChar(120)
   description    String? @db.Text
 
-  userSkills UserSkill[]
-  jobSkills  JobSkill[]
-  skillGaps  SkillGap[]
+  userSkills       UserSkill[]
+  jobSkills        JobSkill[]
+  skillGaps        SkillGap[]
+  jobProfileSkills JobProfileSkill[]
+}
+
+model JobProfile {
+  id               String   @id @default(uuid()) @db.Uuid
+  slug             String   @unique @db.VarChar(180)
+  title            String   @db.VarChar(255)
+  domain           String   @db.VarChar(120)
+  description      String   @db.Text
+  responsibilities Json
+  aliases          String[]
+  source           String   @default("DATABASE") @db.VarChar(50)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  skills         JobProfileSkill[]
+  classifiedJobs JobJobProfile[]
+
+  @@index([domain, isActive])
+  @@index([title])
+}
+
+model JobProfileSkill {
+  id              String                    @id @default(uuid()) @db.Uuid
+  jobProfileId    String                    @db.Uuid
+  skillId         String                    @db.Uuid
+  requirementType JobProfileRequirementType @default(IMPORTANT)
+  requiredLevel   Decimal                   @db.Decimal(6, 3)
+  importance      Decimal                   @db.Decimal(5, 4)
+  aliases         String[]
+
+  jobProfile JobProfile @relation(fields: [jobProfileId], references: [id], onDelete: Cascade)
+  skill      Skill      @relation(fields: [skillId], references: [id], onDelete: Restrict)
+
+  @@unique([jobProfileId, skillId])
+  @@index([jobProfileId, importance])
+  @@index([skillId])
 }
 
 model UserSkill {
@@ -315,9 +364,10 @@ model Job {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  skills    JobSkill[]
-  matches   JobMatch[]
-  skillGaps SkillGap[]
+  skills      JobSkill[]
+  jobProfiles JobJobProfile[]
+  matches     JobMatch[]
+  skillGaps   SkillGap[]
 
   @@unique([source, externalJobId])
   @@index([source])
@@ -338,6 +388,23 @@ model JobSkill {
   @@unique([jobId, skillId])
   @@index([jobId, skillId])
   @@index([skillId])
+}
+
+model JobJobProfile {
+  id                   String   @id @default(uuid()) @db.Uuid
+  jobId                String   @db.Uuid
+  jobProfileId         String   @db.Uuid
+  classificationScore  Decimal  @db.Decimal(6, 3)
+  classificationMethod String   @default("RULE_BASED") @db.VarChar(50)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  job        Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  jobProfile JobProfile @relation(fields: [jobProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, jobProfileId])
+  @@index([jobId, classificationScore])
+  @@index([jobProfileId, classificationScore])
 }
 
 model JobMatch {

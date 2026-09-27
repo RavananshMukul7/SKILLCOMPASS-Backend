@@ -169,31 +169,10 @@ const swaggerDocument: OpenAPIV3.Document = {
         },
       },
 
-      MatchRequest: {
-        type: "object",
-        required: ["analysisRunId"],
-        properties: {
-          analysisRunId: {
-            type: "string",
-            format: "uuid",
-            example: "550e8400-e29b-41d4-a716-446655440000",
-          },
-        },
-      },
-
-      JobMatch: {
+      JobMatchResult: {
         type: "object",
         properties: {
-          id: {
-            type: "string",
-          },
-          userId: {
-            type: "string",
-          },
           jobId: {
-            type: "string",
-          },
-          analysisRunId: {
             type: "string",
           },
           matchScore: {
@@ -202,7 +181,7 @@ const swaggerDocument: OpenAPIV3.Document = {
           },
           skillCoverage: {
             type: "number",
-            example: 85,
+            example: 0.85,
           },
           skillGapCount: {
             type: "integer",
@@ -210,22 +189,6 @@ const swaggerDocument: OpenAPIV3.Document = {
           },
           explanation: {
             type: "string",
-            nullable: true,
-          },
-          algorithmVersion: {
-            type: "string",
-            example: "weighted-skill-v1",
-          },
-          createdAt: {
-            type: "string",
-            format: "date-time",
-          },
-          updatedAt: {
-            type: "string",
-            format: "date-time",
-          },
-          job: {
-            $ref: "#/components/schemas/Job",
           },
         },
       },
@@ -233,9 +196,6 @@ const swaggerDocument: OpenAPIV3.Document = {
       SkillGap: {
         type: "object",
         properties: {
-          id: {
-            type: "string",
-          },
           skill: {
             type: "object",
             properties: {
@@ -244,13 +204,6 @@ const swaggerDocument: OpenAPIV3.Document = {
               },
               name: {
                 type: "string",
-              },
-              normalizedName: {
-                type: "string",
-              },
-              category: {
-                type: "string",
-                nullable: true,
               },
             },
           },
@@ -266,8 +219,26 @@ const swaggerDocument: OpenAPIV3.Document = {
           priority: {
             type: "number",
           },
-          analysisRunId: {
+        },
+      },
+
+      JobRecommendationRequest: {
+        type: "object",
+        description:
+          "Selects one active job profile and an optional minimum match score. Exactly one of jobProfileId or jobProfileSlug is required.",
+        properties: {
+          jobProfileId: {
             type: "string",
+            format: "uuid",
+          },
+          jobProfileSlug: {
+            type: "string",
+          },
+          minScore: {
+            type: "number",
+            minimum: 0,
+            maximum: 100,
+            default: 0,
           },
         },
       },
@@ -912,9 +883,9 @@ const swaggerDocument: OpenAPIV3.Document = {
     "/api/matching/jobs/{jobId}/match": {
       post: {
         tags: ["Matching"],
-        summary: "Calculate job match",
+        summary: "Calculate current job match",
         description:
-          "Calculates how well the authenticated user's skills match a job using a completed analysis run.",
+          "Calculates how well the authenticated user's current persisted UserSkill profile matches a job. No analysis run is required.",
         security: [
           {
             sessionCookie: [],
@@ -930,19 +901,9 @@ const swaggerDocument: OpenAPIV3.Document = {
             },
           },
         ],
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: {
-                $ref: "#/components/schemas/MatchRequest",
-              },
-            },
-          },
-        },
         responses: {
           "200": {
-            description: "Job match calculated successfully.",
+            description: "Current job match calculated successfully.",
             content: {
               "application/json": {
                 schema: {
@@ -958,11 +919,12 @@ const swaggerDocument: OpenAPIV3.Document = {
                         job: {
                           $ref: "#/components/schemas/Job",
                         },
-                        analysisRunId: {
-                          type: "string",
-                        },
                         match: {
-                          type: "object",
+                          $ref: "#/components/schemas/JobMatchResult",
+                        },
+                        algorithmVersion: {
+                          type: "string",
+                          example: "weighted-skill-v2",
                         },
                       },
                     },
@@ -972,20 +934,22 @@ const swaggerDocument: OpenAPIV3.Document = {
             },
           },
           "400": {
-            description: "Invalid job ID or request body.",
+            description: "Invalid job ID.",
           },
           "401": {
             description: "Authentication required.",
           },
           "404": {
-            description: "Completed analysis run or job not found.",
+            description: "Job not found.",
           },
         },
       },
 
       get: {
         tags: ["Matching"],
-        summary: "Get existing job match",
+        summary: "Calculate current job match",
+        description:
+          "Calculates the authenticated user's current live match for a job using the persisted UserSkill profile.",
         security: [
           {
             sessionCookie: [],
@@ -1000,18 +964,10 @@ const swaggerDocument: OpenAPIV3.Document = {
               type: "string",
             },
           },
-          {
-            name: "analysisRunId",
-            in: "query",
-            required: true,
-            schema: {
-              type: "string",
-            },
-          },
         ],
         responses: {
           "200": {
-            description: "Existing job match.",
+            description: "Current job match returned successfully.",
             content: {
               "application/json": {
                 schema: {
@@ -1021,7 +977,19 @@ const swaggerDocument: OpenAPIV3.Document = {
                       type: "boolean",
                     },
                     data: {
-                      $ref: "#/components/schemas/JobMatch",
+                      type: "object",
+                      properties: {
+                        job: {
+                          $ref: "#/components/schemas/Job",
+                        },
+                        match: {
+                          $ref: "#/components/schemas/JobMatchResult",
+                        },
+                        algorithmVersion: {
+                          type: "string",
+                          example: "weighted-skill-v2",
+                        },
+                      },
                     },
                   },
                 },
@@ -1029,13 +997,13 @@ const swaggerDocument: OpenAPIV3.Document = {
             },
           },
           "400": {
-            description: "Missing analysisRunId query parameter.",
+            description: "Invalid job ID.",
           },
           "401": {
             description: "Authentication required.",
           },
           "404": {
-            description: "Job match not found.",
+            description: "Job not found.",
           },
         },
       },
@@ -1044,7 +1012,9 @@ const swaggerDocument: OpenAPIV3.Document = {
     "/api/matching/jobs/{jobId}/gaps": {
       get: {
         tags: ["Matching"],
-        summary: "Get skill gaps for a job",
+        summary: "Get current skill gaps for a job",
+        description:
+          "Returns skill gaps for the selected job based on the authenticated user's current persisted UserSkill profile.",
         security: [
           {
             sessionCookie: [],
@@ -1059,18 +1029,10 @@ const swaggerDocument: OpenAPIV3.Document = {
               type: "string",
             },
           },
-          {
-            name: "analysisRunId",
-            in: "query",
-            required: true,
-            schema: {
-              type: "string",
-            },
-          },
         ],
         responses: {
           "200": {
-            description: "Skill gaps for the selected job and analysis run.",
+            description: "Current skill gaps returned successfully.",
             content: {
               "application/json": {
                 schema: {
@@ -1086,16 +1048,23 @@ const swaggerDocument: OpenAPIV3.Document = {
                         $ref: "#/components/schemas/SkillGap",
                       },
                     },
+                    algorithmVersion: {
+                      type: "string",
+                      example: "weighted-skill-v2",
+                    },
                   },
                 },
               },
             },
           },
           "400": {
-            description: "Missing analysisRunId query parameter.",
+            description: "Invalid job ID.",
           },
           "401": {
             description: "Authentication required.",
+          },
+          "404": {
+            description: "Job not found.",
           },
         },
       },
@@ -1112,7 +1081,7 @@ const swaggerDocument: OpenAPIV3.Document = {
         tags: ["Jobs"],
         summary: "Get recommended jobs",
         description:
-          "Returns jobs recommended for the authenticated user based on a completed analysis run.",
+          "Returns jobs recommended for the authenticated user by matching the user's current persisted UserSkill profile against jobs classified for an active job profile. Exactly one of jobProfileId or jobProfileSlug is required.",
         security: [
           {
             sessionCookie: [],
@@ -1120,14 +1089,25 @@ const swaggerDocument: OpenAPIV3.Document = {
         ],
         parameters: [
           {
-            name: "analysisRunId",
+            name: "jobProfileId",
             in: "query",
-            required: true,
+            required: false,
             schema: {
               type: "string",
               format: "uuid",
             },
-            description: "Completed analysis run used for job recommendations.",
+            description:
+              "Active job profile ID. Use either jobProfileId or jobProfileSlug, but not both.",
+          },
+          {
+            name: "jobProfileSlug",
+            in: "query",
+            required: false,
+            schema: {
+              type: "string",
+            },
+            description:
+              "Active job profile slug. Use either jobProfileSlug or jobProfileId, but not both.",
           },
           {
             name: "minScore",
@@ -1140,37 +1120,6 @@ const swaggerDocument: OpenAPIV3.Document = {
               default: 0,
             },
             description: "Minimum job match score.",
-          },
-          {
-            name: "search",
-            in: "query",
-            required: false,
-            schema: {
-              type: "string",
-            },
-            description: "Optional job search text.",
-          },
-          {
-            name: "remote",
-            in: "query",
-            required: false,
-            schema: {
-              type: "string",
-              enum: ["true", "false"],
-            },
-            description: "Filter jobs by remote availability.",
-          },
-          {
-            name: "limit",
-            in: "query",
-            required: false,
-            schema: {
-              type: "integer",
-              minimum: 1,
-              maximum: 50,
-              default: 20,
-            },
-            description: "Maximum number of jobs to return.",
           },
         ],
         responses: {
@@ -1186,9 +1135,68 @@ const swaggerDocument: OpenAPIV3.Document = {
                       example: true,
                     },
                     data: {
-                      type: "array",
-                      items: {
-                        $ref: "#/components/schemas/Job",
+                      type: "object",
+                      properties: {
+                        jobProfile: {
+                          type: "object",
+                          properties: {
+                            id: {
+                              type: "string",
+                            },
+                            slug: {
+                              type: "string",
+                            },
+                            title: {
+                              type: "string",
+                            },
+                            domain: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        jobsEvaluated: {
+                          type: "integer",
+                        },
+                        matchesGenerated: {
+                          type: "integer",
+                        },
+                        recommendations: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              jobId: {
+                                type: "string",
+                              },
+                              matchScore: {
+                                type: "number",
+                              },
+                              skillCoverage: {
+                                type: "number",
+                              },
+                              skillGapCount: {
+                                type: "integer",
+                              },
+                              explanation: {
+                                type: "string",
+                              },
+                              gaps: {
+                                type: "array",
+                                items: {
+                                  $ref: "#/components/schemas/SkillGap",
+                                },
+                              },
+                              job: {
+                                allOf: [
+                                  {
+                                    $ref: "#/components/schemas/Job",
+                                  },
+                                ],
+                                nullable: true,
+                              },
+                            },
+                          },
+                        },
                       },
                     },
                   },
@@ -1197,13 +1205,14 @@ const swaggerDocument: OpenAPIV3.Document = {
             },
           },
           "400": {
-            description: "Invalid query parameters.",
+            description:
+              "Exactly one job profile selector is required or the query parameters are invalid.",
           },
           "401": {
             description: "Authentication required.",
           },
           "404": {
-            description: "Completed analysis run not found.",
+            description: "Active job profile not found.",
           },
         },
       },
@@ -1214,7 +1223,7 @@ const swaggerDocument: OpenAPIV3.Document = {
         tags: ["Jobs"],
         summary: "Generate job recommendations",
         description:
-          "Calculates and stores job matches for all jobs with skills using a completed analysis run.",
+          "Calculates current job recommendations using the authenticated user's persisted UserSkill profile and an active job profile. No analysis run or recommendation identifier is required.",
         security: [
           {
             sessionCookie: [],
@@ -1225,7 +1234,7 @@ const swaggerDocument: OpenAPIV3.Document = {
           content: {
             "application/json": {
               schema: {
-                $ref: "#/components/schemas/MatchRequest",
+                $ref: "#/components/schemas/JobRecommendationRequest",
               },
             },
           },
@@ -1235,13 +1244,14 @@ const swaggerDocument: OpenAPIV3.Document = {
             description: "Job recommendations generated successfully.",
           },
           "400": {
-            description: "A valid analysisRunId is required.",
+            description:
+              "Exactly one job profile selector is required or the request body is invalid.",
           },
           "401": {
             description: "Authentication required.",
           },
           "404": {
-            description: "Completed analysis run not found.",
+            description: "Active job profile not found.",
           },
         },
       },
